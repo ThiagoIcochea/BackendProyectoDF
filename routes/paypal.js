@@ -4,16 +4,83 @@ const router = express.Router();
 const Payment = require("../models/Payment");
 const Delivery = require("../models/Delivery");
 const Log = require("../models/Log");
-const verifyToken = require("../middlewares/verifyToken");
-const isAdmin = require("../middlewares/isAdmin");
 const Product = require("../models/Product");
-const User = require("../models/User");
+const verifyToken = require("../middlewares/verifyToken");
 const wsBroadcast = require("../utils/wsBroadcast");
+const { createPayPalOrder, capturePayPalOrder } = require("../utils/paypalHelper");
 
-router.post("/", verifyToken, async (req, res) => {
+/**
+ * El frontend requiere el ID de la orden de PayPal para inicializar los botones de pago 
+ * y permitir que el usuario apruebe la transacción en la interfaz segura de PayPal.
+ */
+router.post("/create-order", verifyToken, async (req, res) => {
     try {
-        const { saveCard, paymentmethod, ...paymentBody } = req.body;
-        const payment = new Payment(paymentBody);
+        const { total } = req.body;
+
+        if (!total || isNaN(total) || total <= 0) {
+            return res.status(400).json({ message: "El monto total de la compra debe ser un número mayor a cero" });
+        }
+
+        const payPalOrder = await createPayPalOrder(total);
+        
+        return res.status(201).json({
+            message: "Orden de PayPal creada exitosamente",
+            orderId: payPalOrder.id,
+            links: payPalOrder.links
+        });
+    } catch (error) {
+        console.error("Error al crear orden en PayPal:", error);
+        return res.status(500).json({ message: "Error interno al crear orden en PayPal", error: error.message });
+    }
+});
+
+/**
+ * @route   POST /api/paypal/capture-order
+ * @desc    Captura una orden aprobada por el usuario en PayPal y registra el pago en MongoDB
+ * @access  Autenticado
+ * 
+ * ¿CÓMO funciona?
+ * 1. Invoca el helper 'capturePayPalOrder' para confirmar y transferir los fondos de PayPal.
+ * 2. Valida que el estado retornado por PayPal sea 'COMPLETED'.
+ * 3. Guarda el pago en la base de datos (MongoDB) usando el modelo común 'Payment' con estado 'Pagado'.
+ * 4. Dispara las alertas por websockets si hay productos con descuento elegibles.
+ * 5. Genera el registro de auditoría (Log).
+ * 
+ * ¿POR QUÉ esta estructura?
+ * Garantiza que solo guardemos el pago en base de datos si la pasarela de PayPal certifica 
+ * que los fondos fueron cobrados de forma exitosa. Mantiene paridad con la lógica de auditoría
+ * y notificaciones web del router manual original.
+ */
+router.post("/capture-order", verifyToken, async (req, res) => {
+    try {
+        const { orderId, paymentData } = req.body;
+
+        if (!orderId) {
+            return res.status(400).json({ message: "El campo orderId es obligatorio para capturar el pago" });
+        }
+
+        if (!paymentData || typeof paymentData !== "object") {
+            return res.status(400).json({ message: "Faltan los datos del pago (paymentData) para guardar en base de datos" });
+        }
+
+        // Llama a PayPal para capturar oficialmente el dinero
+        const captureResult = await capturePayPalOrder(orderId);
+
+        // Verificamos si la orden fue capturada exitosamente
+        if (captureResult.status !== "COMPLETED") {
+            return res.status(400).json({
+                message: "No se pudo capturar el pago. El estado de la transacción no es COMPLETED",
+                status: captureResult.status
+            });
+        }
+
+        // Mapeamos los datos de pago al esquema Payment de MongoDB
+        // Establecemos explícitamente el estado a "Pagado" ya que PayPal completó el cobro
+        const payment = new Payment({
+            ...paymentData,
+            estado: "Pagado"
+        });
+
         await payment.save();
 
         // ANÁLISIS CRÍTICO DEL DISEÑO ANTERIOR:
@@ -41,19 +108,7 @@ router.post("/", verifyToken, async (req, res) => {
 
         await reactiveDelivery.save();
 
-        if (saveCard && paymentmethod && req.user?.id) {
-            const user = await User.findById(req.user.id);
-            if (user) {
-                user.paymentmethod = {
-                    nombretarjeta: paymentmethod.nombretarjeta || user.paymentmethod?.nombretarjeta || "",
-                    numerotarjeta: paymentmethod.numerotarjeta || user.paymentmethod?.numerotarjeta || "",
-                    cvv: paymentmethod.cvv || user.paymentmethod?.cvv || "",
-                    tipo: paymentmethod.tipo || user.paymentmethod?.tipo || "visa"
-                };
-                await user.save();
-            }
-        }
-
+        // Lógica de Alertas de Compra para WebSockets (Mismo comportamiento que el router manual)
         const discountProducts = (payment.productos || []).filter((item) => {
             const quantity = Number(item.quantity || 0);
             return quantity > 0;
@@ -112,48 +167,49 @@ router.post("/", verifyToken, async (req, res) => {
                 });
             }
         }
+
+        // Registro de Auditoría (Logs)
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP Desconocida";
         const userAgent = req.headers['user-agent'] || "Dispositivo Desconocido";
-        const nuevoLog = new Log({
+        
+        const auditLog = new Log({
             ip: clientIp,
             usuario: payment.cliente || "Anónimo",
-            descripcion: `Compra registrada - Doc: ${payment.documento || 'N/A'} | Total: S/. ${payment.total}`,
+            descripcion: `Compra registrada por PayPal - OrderID: ${orderId} | PagoID: ${payment._id} | Total: $ ${payment.total}`,
             tipo: "TRANSACCION",
             metodo: req.method,
             ruta: req.originalUrl,
             userAgent: userAgent
         });
 
-        await nuevoLog.save();
-        res.json({
-            message: "Pago registrado y auditoría guardada exitosamente"
+        await auditLog.save();
+
+        return res.status(200).json({
+            message: "Pago de PayPal capturado y registrado con éxito",
+            payment
         });
 
     } catch (error) {
-        console.error("Error en el pago:", error);
+        console.error("Error al capturar orden de PayPal:", error);
 
+        // Registro de log de error
         try {
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP Desconocida";
             await new Log({
                 ip: clientIp,
                 usuario: "Sistema",
-                descripcion: `Fallo al procesar pago: ${error.message}`,
+                descripcion: `Fallo al capturar/guardar pago PayPal: ${error.message}`,
                 tipo: "ERROR",
                 metodo: req.method,
                 ruta: req.originalUrl,
                 userAgent: req.headers['user-agent']
             }).save();
         } catch (logError) {
-            console.error("Error crítico: No se pudo guardar el log de error", logError);
+            console.error("Error crítico: No se pudo registrar el log del fallo", logError);
         }
 
-        res.status(500).json(error);
+        return res.status(500).json({ message: "Error interno al capturar el pago", error: error.message });
     }
-});
-
-router.get("/", verifyToken, isAdmin, async (req, res) => {
-    const payments = await Payment.find();
-    res.json(payments);
 });
 
 module.exports = router;
