@@ -8,45 +8,19 @@ const isAdmin = require("../middlewares/isAdmin");
 
 /** 
  * @route   POST /api/deliveries
- * @desc    Registrar o actualizar (Upsert) una orden de entrega asociada a un pago
- * @access  Autenticado (Cualquier usuario logueado)
- *  
- * ANÁLISIS CRÍTICO DEL DISEÑO ANTERIOR:
- * En el diseño original, no se verificaba si ya existía un registro de despacho para el 'paymentId'. 
- * Esto permitía duplicados no deseados en la base de datos (relación lógica 1-a-1 rota). 
- * Se refactoriza para implementar un patrón de "upsert" (creación o actualización) seguro.
- * Además, las validaciones de campos requeridos dependían de una estructura estática. Ahora
- * validamos de manera estricta y dinámica según el 'deliveryType' del pago.
- * 
- * CONTRATO API:
- * - Recibe:
- *   {
- *     "paymentId": "string (Mongoose ObjectId) - Obligatorio",
- *     "destinationAddress": "string - Requerido si deliveryType === 'shipping'",
- *     "reference": "string - Requerido si deliveryType === 'shipping'",
- *     "agency": "string - Requerido si deliveryType === 'shipping'",
- *     "estimatedDate": "string (ISO Date) - Opcional"
- *   }
- * - Retorna:
- *   - 201 Created: { "message": "Entrega creada con éxito", "delivery": { ... } }
- *   - 200 OK: { "message": "Entrega actualizada con éxito", "delivery": { ... } }
- *   - 400 Bad Request: { "message": "Faltan datos obligatorios o formato inválido" }
- *   - 404 Not Found: { "message": "No se encontró el registro de pago" }
- *   - 500 Internal Server Error: { "message": "Error del servidor" }
+ * @desc    Registrar o actualizar (Upsert) una orden de entrega asociada a un pago verificado
+ * @access  Autenticado
  */
 router.post("/", verifyToken, async (req, res) => {
     try {
         const { paymentId, destinationAddress, reference, agency, estimatedDate } = req.body;
 
-        // CÓMO: Validación inicial de la referencia de pago indispensable.
         if (!paymentId) {
             return res.status(400).json({
                 message: "El campo paymentId es estrictamente obligatorio para registrar una entrega."
             });
         }
 
-        // CÓMO: Buscar el pago correspondiente y validar su existencia y su estado 'Pagado'.
-        // POR QUÉ: Evitamos despachar productos de transacciones fallidas o pendientes.
         const payment = await Payment.findById(paymentId);
         if (!payment) {
             return res.status(404).json({
@@ -60,12 +34,9 @@ router.post("/", verifyToken, async (req, res) => {
             });
         }
 
-        // CÓMO: Recuperamos el 'deliveryType' directamente del modelo de pago.
         const deliveryType = payment.deliveryType || "shipping";
 
-        // CÓMO: Validación estricta según el tipo de entrega omnicanal.
-        // POR QUÉ: Si es 'pickup', no se deben enviar ni almacenar datos de dirección ni agencia. 
-        // Si es 'shipping', se requiere obligatoriamente toda la información del destino.
+        // Validaciones condicionales según el tipo de entrega (shipping o pickup)
         if (deliveryType === "pickup") {
             if (destinationAddress || reference || agency) {
                 return res.status(400).json({
@@ -80,8 +51,7 @@ router.post("/", verifyToken, async (req, res) => {
             }
         }
 
-        // CÓMO: Buscamos si ya existe una entrega registrada para este pago.
-        // POR QUÉ: Implementamos el Upsert para actualizar la entrega existente si el cliente o sistema re-envía la orden.
+        // Patrón Upsert: busca entrega existente para evitar duplicidad de registros logísticos
         let delivery = await Delivery.findOne({ paymentId });
         let isNew = false;
 
@@ -94,13 +64,12 @@ router.post("/", verifyToken, async (req, res) => {
             });
         }
 
-        // CÓMO: Asignamos valores solo si corresponden al flujo logístico.
         if (deliveryType === "shipping") {
             delivery.destinationAddress = destinationAddress;
             delivery.reference = reference;
             delivery.agency = agency;
         } else {
-            // Limpiamos campos de envío para evitar persistencia de datos basura en pickup
+            // Limpieza de campos de envío para evitar datos residuales en retiro (pickup)
             delivery.destinationAddress = undefined;
             delivery.reference = undefined;
             delivery.agency = undefined;
@@ -125,12 +94,8 @@ router.post("/", verifyToken, async (req, res) => {
 
 /**
  * @route   GET /api/deliveries
- * @desc    Obtener todas las entregas (ordenadas de forma descendente)
- * @access  Solo Administradores (verifyToken + isAdmin)
- * 
- * CÓMO: Añadimos '.populate("paymentId")' para obtener los datos de la orden/pago embebidos.
- * POR QUÉ: El frontend requiere mostrar detalles del pago (deliveryType, cliente, total) sin hacer 
- * múltiples consultas a la base de datos, optimizando el rendimiento y red.
+ * @desc    Obtener todas las entregas ordenadas de forma descendente poblando la relación con Payment
+ * @access  Solo Administradores
  */
 router.get("/", verifyToken, isAdmin, async (req, res) => {
     try {
@@ -145,10 +110,8 @@ router.get("/", verifyToken, isAdmin, async (req, res) => {
 
 /**
  * @route   GET /api/deliveries/:paymentId
- * @desc    Obtener la entrega asociada a un pago en específico
- * @access  Autenticado (Usuario dueño o administrador)
- * 
- * CÓMO: Añadimos '.populate("paymentId")' para retornar los datos del pago asociados al despacho.
+ * @desc    Obtener la entrega asociada a un pago en específico poblando la relación con Payment
+ * @access  Autenticado
  */
 router.get("/:paymentId", verifyToken, async (req, res) => {
     try {
@@ -171,7 +134,7 @@ router.get("/:paymentId", verifyToken, async (req, res) => {
 /**
  * @route   PUT /api/deliveries/:id
  * @desc    Actualizar detalles generales de una entrega por su ID
- * @access  Solo Administradores (verifyToken + isAdmin)
+ * @access  Solo Administradores
  */
 router.put("/:id", verifyToken, isAdmin, async (req, res) => {
     try {
@@ -183,7 +146,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
         
-        // CÓMO: Validaciones condicionales al editar el despacho por ID.
+        // Validaciones condicionales al editar el despacho por ID
         if (delivery.deliveryType === "pickup") {
             if (destinationAddress || reference || agency) {
                 return res.status(400).json({
@@ -202,7 +165,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
             }
         }
         
-        // CÓMO: Asignación segura de campos editables.
+        // Asignación de campos según el tipo de entrega omnicanal
         if (delivery.deliveryType === "shipping") {
             if (destinationAddress !== undefined) delivery.destinationAddress = destinationAddress;
             if (reference !== undefined) delivery.reference = reference;
@@ -229,12 +192,8 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
 
 /**
  * @route   PATCH /api/deliveries/:id/status
- * @desc    Endpoint rápido y exclusivo para actualizar el estado logístico
- * @access  Solo Administradores (verifyToken + isAdmin)
- * 
- * CÓMO: Filtramos estrictamente el cambio de estado a 'ready_for_pickup', 'shipped' y 'delivered'.
- * POR QUÉ: Permite a los operadores de almacén o repartidores actualizar de forma directa, ágil y segura 
- * el estado logístico, impidiendo modificaciones accidentales sobre otras propiedades de la entrega.
+ * @desc    Actualizar el estado logístico de una entrega de forma rápida y exclusiva
+ * @access  Solo Administradores
  */
 router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
     try {
@@ -252,7 +211,6 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
 
-        // CÓMO: Actualizamos únicamente el estado logístico.
         delivery.status = status;
         await delivery.save();
 

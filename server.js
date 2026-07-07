@@ -1,5 +1,4 @@
 require("dotenv").config();
-console.log(`[DEBUG] Variables de entorno cargadas. RESEND_API_KEY: ${process.env.RESEND_API_KEY ? 'CONFIGURADA' : 'NO ENCONTRADA'}`);
 const http = require("http");
 const express = require("express");
 const mongoose = require("mongoose");
@@ -78,16 +77,8 @@ app.use("/api/admin/logs", require("./routes/logs"));
 app.use("/api/payments", require("./routes/payments"));
 app.use("/api/chat", require("./routes/chatRoutes"));
 
-// ¿CÓMO? Registramos el nuevo módulo de entregas asociando el prefijo '/api/deliveries'
-// a las rutas definidas en 'routes/deliveries.js'.
-// ¿POR QUÉ? Permite que todas las peticiones a este prefijo sean atendidas por el nuevo enrutador modular,
-// manteniendo el principio de responsabilidad única en server.js.
 app.use("/api/deliveries", require("./routes/deliveries"));
 
-// ¿CÓMO? Registramos la pasarela paralela de PayPal asociando el prefijo '/api/paypal'
-// a las rutas definidas en 'routes/paypal.js'.
-// ¿POR QUÉ? Desacopla la lógica de PayPal del resto del sistema de pagos manuales,
-// permitiendo evolucionar o apagar la pasarela de forma independiente sin riesgo de regresión.
 app.use("/api/paypal", require("./routes/paypal"));
 
 const server = http.createServer(app);

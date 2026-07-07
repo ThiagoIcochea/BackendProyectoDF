@@ -10,8 +10,9 @@ const wsBroadcast = require("../utils/wsBroadcast");
 const { createPayPalOrder, capturePayPalOrder } = require("../utils/paypalHelper");
 
 /**
- * El frontend requiere el ID de la orden de PayPal para inicializar los botones de pago 
- * y permitir que el usuario apruebe la transacción en la interfaz segura de PayPal.
+ * @route   POST /api/paypal/create-order
+ * @desc    Crea una orden en PayPal para iniciar el flujo de pago desde el frontend
+ * @access  Autenticado
  */
 router.post("/create-order", verifyToken, async (req, res) => {
     try {
@@ -36,20 +37,8 @@ router.post("/create-order", verifyToken, async (req, res) => {
 
 /**
  * @route   POST /api/paypal/capture-order
- * @desc    Captura una orden aprobada por el usuario en PayPal y registra el pago en MongoDB
+ * @desc    Captura una orden aprobada en PayPal, registra el pago en la base de datos y crea la orden de entrega correspondiente
  * @access  Autenticado
- * 
- * ¿CÓMO funciona?
- * 1. Invoca el helper 'capturePayPalOrder' para confirmar y transferir los fondos de PayPal.
- * 2. Valida que el estado retornado por PayPal sea 'COMPLETED'.
- * 3. Guarda el pago en la base de datos (MongoDB) usando el modelo común 'Payment' con estado 'Pagado'.
- * 4. Dispara las alertas por websockets si hay productos con descuento elegibles.
- * 5. Genera el registro de auditoría (Log).
- * 
- * ¿POR QUÉ esta estructura?
- * Garantiza que solo guardemos el pago en base de datos si la pasarela de PayPal certifica 
- * que los fondos fueron cobrados de forma exitosa. Mantiene paridad con la lógica de auditoría
- * y notificaciones web del router manual original.
  */
 router.post("/capture-order", verifyToken, async (req, res) => {
     try {
@@ -63,10 +52,8 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             return res.status(400).json({ message: "Faltan los datos del pago (paymentData) para guardar en base de datos" });
         }
 
-        // Llama a PayPal para capturar oficialmente el dinero
         const captureResult = await capturePayPalOrder(orderId);
 
-        // Verificamos si la orden fue capturada exitosamente
         if (captureResult.status !== "COMPLETED") {
             return res.status(400).json({
                 message: "No se pudo capturar el pago. El estado de la transacción no es COMPLETED",
@@ -74,8 +61,6 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             });
         }
 
-        // Mapeamos los datos de pago al esquema Payment de MongoDB
-        // Establecemos explícitamente el estado a "Pagado" ya que PayPal completó el cobro
         const payment = new Payment({
             ...paymentData,
             estado: "Pagado"
@@ -83,14 +68,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
 
         await payment.save();
 
-        // ANÁLISIS CRÍTICO DEL DISEÑO ANTERIOR:
-        // Los pagos exitosos se guardaban pero no generaban su respectiva orden logística en Delivery de forma reactiva.
-        // Esto causaba que el panel de administración de despachos quedara a ciegas.
-        // 
-        // CÓMO: Instanciamos y guardamos un nuevo documento 'Delivery' asociado al pago.
-        // POR QUÉ: Asegura la integridad lógica y la aparición inmediata de la orden en el dashboard logístico.
-        // Si es de tipo 'shipping', asignamos valores por defecto a los campos obligatorios para no violar 
-        // las restricciones del esquema en base de datos.
+        // Creación reactiva de la orden logística en Delivery asociada al pago
         const reactiveDelivery = new Delivery({
             paymentId: payment._id,
             deliveryType: payment.deliveryType || "shipping",
@@ -108,7 +86,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
 
         await reactiveDelivery.save();
 
-        // Lógica de Alertas de Compra para WebSockets (Mismo comportamiento que el router manual)
+        // Emisión de alertas por WebSockets para productos con descuento
         const discountProducts = (payment.productos || []).filter((item) => {
             const quantity = Number(item.quantity || 0);
             return quantity > 0;
@@ -168,7 +146,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             }
         }
 
-        // Registro de Auditoría (Logs)
+        // Registro del log de auditoría
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP Desconocida";
         const userAgent = req.headers['user-agent'] || "Dispositivo Desconocido";
         
@@ -192,7 +170,6 @@ router.post("/capture-order", verifyToken, async (req, res) => {
     } catch (error) {
         console.error("Error al capturar orden de PayPal:", error);
 
-        // Registro de log de error
         try {
             const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP Desconocida";
             await new Log({
