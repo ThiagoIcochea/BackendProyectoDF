@@ -163,6 +163,7 @@ const handleClientMessage = async (socket, message) => {
     if (roomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
       socket.supportSession = session;
+      
       const replyText = await buildSupportBotReply(normalizedText, session);
       const assistantMessage = await persistMessage({
         roomKey,
