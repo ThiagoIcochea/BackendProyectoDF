@@ -1,5 +1,4 @@
 require("dotenv").config();
-
 const http = require("http");
 const express = require("express");
 const mongoose = require("mongoose");
@@ -82,6 +81,10 @@ app.use("/api/admin/logs", require("./routes/logs"));
 
 app.use("/api/payments", require("./routes/payments"));
 app.use("/api/chat", require("./routes/chatRoutes"));
+
+app.use("/api/deliveries", require("./routes/deliveries"));
+
+app.use("/api/paypal", require("./routes/paypal"));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
