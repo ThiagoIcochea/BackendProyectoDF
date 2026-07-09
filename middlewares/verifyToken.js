@@ -6,6 +6,8 @@ const verifyToken = async (req, res, next) => {
     try {
 
         const token = req.cookies.token;
+        console.log("Cookies:", req.cookies);
+        console.log("Token:", req.cookies.token);
 
         if (!token) {
 
@@ -19,8 +21,10 @@ const verifyToken = async (req, res, next) => {
             token,
             process.env.JWT_SECRET
         );
+        console.log(decoded);
 
         const user = await User.findById(decoded.id);
+        console.log(req.user);
 
         if (!user) {
             res.clearCookie("token");

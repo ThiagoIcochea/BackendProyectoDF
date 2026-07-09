@@ -131,36 +131,36 @@ const handleClientMessage = async (socket, message) => {
     const normalizedText = String(text || "").trim();
     if (!normalizedText) return;
 
-  let messageMeta = {};
+    let messageMeta = {};
 
-if (roomKey === "community") {
-  const moderation = await moderateCommunityMessage(normalizedText);
+    if (roomKey === "community") {
+      const moderation = await moderateCommunityMessage(normalizedText);
 
-  if (!moderation.allowed) {
-    socket.send(JSON.stringify({
-      type: "error",
-      message: moderation.reason || "Mensaje no permitido."
-    }));
-    return;
-  }
+      if (!moderation.allowed) {
+        socket.send(JSON.stringify({
+          type: "error",
+          message: moderation.reason || "Mensaje no permitido."
+        }));
+        return;
+      }
 
-  messageMeta = {
-    moderation
-  };
-}
+      messageMeta = {
+        moderation
+      };
+    }
 
-   const savedMessage = await persistMessage({
-  roomKey,
-  userId: userId || socket.userId || null,
-  username: username || socket.username || "Usuario",
-  text: normalizedText,
-  profileImg: profileImg || socket.profileImg || "",
-  role: "user",
-  meta: messageMeta
-});
+    const savedMessage = await persistMessage({
+      roomKey,
+      userId: userId || socket.userId || null,
+      username: username || socket.username || "Usuario",
+      text: normalizedText,
+      profileImg: profileImg || socket.profileImg || "",
+      role: "user",
+      meta: messageMeta
+    });
     broadcastToRoom(roomKey, { type: "room-message", message: savedMessage });
 
-    if (roomKey === "support") {
+    if (roomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
       socket.supportSession = session;
       const replyText = await buildSupportBotReply(normalizedText, session);

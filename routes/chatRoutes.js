@@ -2,6 +2,15 @@ const express = require("express");
 const router = express.Router();
 const ChatMessage = require("../models/ChatMessage");
 const ChatRoom = require("../models/ChatRoom");
+const verifyToken = require("../middlewares/verifyToken");
+
+// Middleware que aplica verifyToken solo para salas de soporte
+const verifySupportRoomToken = async (req, res, next) => {
+  if (req.params.roomKey && req.params.roomKey.startsWith("support")) {
+    return verifyToken(req, res, next);
+  }
+  next();
+};
 
 router.get("/rooms", async (req, res) => {
   try {
@@ -12,9 +21,17 @@ router.get("/rooms", async (req, res) => {
   }
 });
 
-router.get("/rooms/:roomKey/messages", async (req, res) => {
+router.get("/rooms/:roomKey/messages", verifySupportRoomToken, async (req, res) => {
   try {
     const { roomKey } = req.params;
+
+    if (roomKey.startsWith("support")) {
+      const expectedRoomKey = `support_${req.user.id}`;
+      if (roomKey !== expectedRoomKey) {
+        return res.status(403).json({ message: "No autorizado a ver este chat de soporte." });
+      }
+    }
+
     const limit = Math.min(Number(req.query.limit) || 100, 200);
 
     const messages = await ChatMessage.find({ roomKey })
@@ -28,3 +45,4 @@ router.get("/rooms/:roomKey/messages", async (req, res) => {
 });
 
 module.exports = router;
+

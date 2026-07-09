@@ -21,6 +21,15 @@ const OTP_EXPIRE_MS = 5 * 60 * 1000;
 const RESEND_WAIT_MS = 30 * 1000;
 const BLOCK_DURATION_MS = 2 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 3;
+const isProduction = process.env.NODE_ENV === "production";
+// En localhost/desarrollo, permitir sameSite: "none" con secure: false para cross-origin
+// En producción, requerir secure: true para sameSite: "none"
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: "none",
+  maxAge: 7 * 24 * 60 * 60 * 1000
+};
 const pendingRegistrations = new Map();
 const pendingPasswordChanges = new Map();
 const pendingProfileUpdates = new Map();
@@ -387,12 +396,7 @@ router.post("/verify-2fa", async (req, res) => {
       await recordLog({ req, usuario: user.email, descripcion: "Registro completado tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
+      res.cookie("token", token, cookieOptions);
 
       return res.json({
         message: "Verificación correcta",
@@ -519,12 +523,7 @@ router.post("/verify-2fa", async (req, res) => {
       await recordLog({ req, usuario: user.email, descripcion: "Contraseña actualizada tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
+      res.cookie("token", token, cookieOptions);
 
       return res.json({
         message: "Contraseña actualizada correctamente",
@@ -596,12 +595,7 @@ router.post("/verify-2fa", async (req, res) => {
       }
     );
 
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    res.cookie("token", token, cookieOptions);
 
     return res.json({
       message: "Verificación correcta",

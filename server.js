@@ -16,61 +16,66 @@ const PORT = process.env.PORT || 4000;
 
 const app = express();
 
+const dns = require('node:dns')
+dns.setServers([
+  '8.8.8.8',
+]);
+
 app.use(express.json());
 
 app.use(cookieParser());
 
 app.use((req, res, next) => {
-    const start = Date.now();
+  const start = Date.now();
 
-    res.on("finish", () => {
-        const shouldLog = req.originalUrl?.startsWith("/api") || req.originalUrl === "/";
-        if (!shouldLog) return;
+  res.on("finish", () => {
+    const shouldLog = req.originalUrl?.startsWith("/api") || req.originalUrl === "/";
+    if (!shouldLog) return;
 
-        const description = `${req.method} ${req.originalUrl} -> ${res.statusCode}`;
-        recordLog({
-            req,
-            usuario: req.user?.email || req.user?.name || "Anónimo",
-            descripcion: description,
-            tipo: res.statusCode >= 400 ? "ERROR" : "TRANSACCION",
-            metodo: req.method,
-            ruta: req.originalUrl
-        }).catch(() => {});
-    });
+    const description = `${req.method} ${req.originalUrl} -> ${res.statusCode}`;
+    recordLog({
+      req,
+      usuario: req.user?.email || req.user?.name || "Anónimo",
+      descripcion: description,
+      tipo: res.statusCode >= 400 ? "ERROR" : "TRANSACCION",
+      metodo: req.method,
+      ruta: req.originalUrl
+    }).catch(() => { });
+  });
 
-    res.on("close", () => {
-        if (Date.now() - start > 5000) {
-            recordLog({
-                req,
-                usuario: req.user?.email || req.user?.name || "Anónimo",
-                descripcion: `${req.method} ${req.originalUrl} terminó de forma inesperada`,
-                tipo: "ERROR",
-                metodo: req.method,
-                ruta: req.originalUrl
-            }).catch(() => {});
-        }
-    });
+  res.on("close", () => {
+    if (Date.now() - start > 5000) {
+      recordLog({
+        req,
+        usuario: req.user?.email || req.user?.name || "Anónimo",
+        descripcion: `${req.method} ${req.originalUrl} terminó de forma inesperada`,
+        tipo: "ERROR",
+        metodo: req.method,
+        ruta: req.originalUrl
+      }).catch(() => { });
+    }
+  });
 
-    next();
+  next();
 });
 
 app.use(cors({
-    origin: ["https://nendoshop.onrender.com",   "http://localhost:3000",
-        "http://192.168.1.7:3000"],
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE","PATCH", "OPTIONS"]
+  origin: ["https://nendoshop.onrender.com", "http://localhost:3000",
+    "http://192.168.1.7:3000"],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 }));
 mongoose.connect(process.env.MONGO_URI)
-.then(() => {
+  .then(() => {
     console.log("Mongo conectado");
-});
+  });
 
-app.use("/api/admin/payments",require("./routes/payments"))
+app.use("/api/admin/payments", require("./routes/payments"))
 app.use("/api/admin/clients", require("./routes/adminClients"));
 app.use("/api/admin/products", require("./routes/adminProducts"));
 app.use("/api/products", require("./routes/products"));
 app.use("/api/configs", require("./routes/configRoutes"));
-app.use("/api/users",require("./routes/userRoutes"))
+app.use("/api/users", require("./routes/userRoutes"))
 app.use("/api/auth", authRoutes);
 
 app.use("/api/admin/logs", require("./routes/logs"));
