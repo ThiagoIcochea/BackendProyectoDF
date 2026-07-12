@@ -9,6 +9,7 @@ const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
 const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
 const User = require("../models/User");
+const { ensureDeliveryCode } = require("../utils/deliveryCode");
 
 /** 
  * @route   POST /api/deliveries
@@ -252,6 +253,12 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
 
+        if (status === "ready_for_pickup") {
+            if (!delivery.deliveryCode) {
+                ensureDeliveryCode(delivery);
+            }
+        }
+
         if (status === "delivered") {
             if (!deliveryCode) {
                 return res.status(400).json({ message: "Para confirmar la entrega debes ingresar el código de validación." });
@@ -265,7 +272,7 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
         }
 
         delivery.status = status;
-        if (deliveryCode !== undefined) {
+        if (deliveryCode !== undefined && status === "delivered") {
             delivery.deliveryCode = deliveryCode;
         }
         await delivery.save();
