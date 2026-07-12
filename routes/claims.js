@@ -111,7 +111,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
       }
       await delivery.save({ session });
 
-      if (newDeliveryStatus === 'cancelled' && delivery.paymentId) {
+      if ((newDeliveryStatus === 'cancelled' || newDeliveryStatus === 'returned') && delivery.paymentId) {
         const payment = await Payment.findById(delivery.paymentId).session(session);
         if (payment?.productos?.length) {
           for (const item of payment.productos) {
@@ -121,6 +121,11 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
               { session }
             );
           }
+        }
+
+        if (newDeliveryStatus === 'returned' && payment) {
+          payment.estado = 'Refunded';
+          await payment.save({ session });
         }
       }
 

@@ -67,6 +67,14 @@ const canCreateClaim = ({ category, currentStatus, deadlineDate, existingClaims 
     return { allowed: true, reason: 'Reclamo habilitado.' };
   }
 
+  if (normalizedCategory === 'return') {
+    if (normalizedStatus !== 'delivered') {
+      return { allowed: false, reason: 'La solicitud de devolución solo puede registrarse cuando el pedido ya fue entregado.' };
+    }
+
+    return { allowed: true, reason: 'Reclamo habilitado.' };
+  }
+
   if (normalizedCategory === 'cancellation') {
     if (normalizedStatus !== 'cancelled') {
       return { allowed: false, reason: 'El reclamo por cancelación solo puede generarse cuando el pedido ya fue cancelado.' };
