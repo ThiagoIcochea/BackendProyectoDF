@@ -6,6 +6,11 @@ const DeliverySchema = new mongoose.Schema({
         ref: "Payment",
         required: [true, "La referencia al pago (paymentId) es obligatoria."]
     },
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: [true, "La referencia al usuario (user) es obligatoria."]
+    },
     deliveryType: {
         type: String,
         enum: {
@@ -17,10 +22,14 @@ const DeliverySchema = new mongoose.Schema({
     status: {
         type: String,
         enum: {
-            values: ["pending", "ready_for_pickup", "shipped", "delivered"],
+            values: ["pending", "ready_for_pickup", "shipped", "delivered", "returned"],
             message: "{VALUE} no es un estado de entrega válido."
         },
         default: "pending"
+    },
+    returnCost: {
+        type: Number,
+        default: 0
     },
     // Se utiliza una función tradicional para enlazar el contexto de 'this' en la evaluación dinámica del tipo de entrega
     destinationAddress: {
