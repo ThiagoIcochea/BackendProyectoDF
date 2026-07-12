@@ -135,8 +135,17 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         }
       }
 
+      const statusLabel = {
+        pending: 'pendiente',
+        ready_for_pickup: 'listo para recojo',
+        shipped: 'enviado',
+        delivered: 'entregado',
+        cancelled: 'cancelado',
+        returned: 'devuelto'
+      }[delivery.status] || delivery.status;
+
       const userDoc = await User.findById(claim.user).session(session);
-      await sendOrderUpdateEmail(userDoc, 'Actualización de tu reclamo', `Tu reclamo ha sido ${claim.status === 'resolved' ? 'resuelto' : 'actualizado'}.\n${resolution || 'Revisa la información en tu pedido.'}`);
+      await sendOrderUpdateEmail(userDoc, 'Actualización de tu reclamo', `Tu reclamo ha sido ${claim.status === 'resolved' ? 'resuelto' : 'actualizado'}.\n${resolution || 'Revisa la información en tu pedido.'}\nEstado del pedido: ${statusLabel}.`);
     }
 
     res.json({ message: 'Reclamo actualizado correctamente.', claim, delivery });

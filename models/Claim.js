@@ -18,7 +18,7 @@ const ClaimSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['delay', 'incomplete', 'damaged', 'cancellation']
+    enum: ['delay', 'incomplete', 'damaged', 'return', 'cancellation']
   },
   description: {
     type: String,
