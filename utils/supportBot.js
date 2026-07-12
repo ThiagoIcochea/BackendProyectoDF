@@ -277,6 +277,30 @@ const fallbackClassification = (text) => {
   };
 };
 
+const normalizeClassificationResult = (text, rawResult) => {
+  const fallback = fallbackClassification(text);
+  if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) {
+    return fallback;
+  }
+
+  return {
+    allowed: typeof rawResult.allowed === "boolean" ? rawResult.allowed : fallback.allowed,
+    block: typeof rawResult.block === "boolean" ? rawResult.block : fallback.block,
+    category: typeof rawResult.category === "string" && rawResult.category.trim()
+      ? rawResult.category
+      : (fallback.block ? "inapropiado" : "apropiado"),
+    reason: typeof rawResult.reason === "string" && rawResult.reason.trim()
+      ? rawResult.reason
+      : fallback.reason,
+    intent: typeof rawResult.intent === "string" && rawResult.intent.trim()
+      ? rawResult.intent
+      : fallback.intent,
+    productQuery: typeof rawResult.productQuery === "string" ? rawResult.productQuery : fallback.productQuery,
+    orderNumber: typeof rawResult.orderNumber === "string" ? rawResult.orderNumber : fallback.orderNumber,
+    surveyRating: typeof rawResult.surveyRating === "number" ? rawResult.surveyRating : null
+  };
+};
+
 const classifyMessage = async (text) => {
   const apiKey = await getGroqApiKey();
   if (!apiKey) return fallbackClassification(text);
@@ -289,7 +313,13 @@ const classifyMessage = async (text) => {
       maxOutputTokens: 300,
       onFallback: () => JSON.stringify(fallbackClassification(text))
     });
-    return parseGroqJson(raw) || fallbackClassification(text);
+
+    const parsed = parseGroqJson(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return normalizeClassificationResult(text, parsed);
+    }
+
+    return fallbackClassification(text);
   } catch (err) {
     console.error("Clasificación con Groq falló:", err.message);
     return fallbackClassification(text);
@@ -555,6 +585,7 @@ module.exports = {
   createSupportSession,
   getSupportBotReply,
   buildSupportBotReply,
+  classifyMessage,
   checkTextSafety,
   normalizeCustomerName,
   extractOrderNumber,
