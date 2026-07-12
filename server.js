@@ -85,6 +85,7 @@ app.use("/api/chat", require("./routes/chatRoutes"));
 app.use("/api/deliveries", require("./routes/deliveries"));
 
 app.use("/api/paypal", require("./routes/paypal"));
+app.use("/api/claims", require("./routes/claims"));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });

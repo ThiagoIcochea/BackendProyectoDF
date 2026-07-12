@@ -2,28 +2,18 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 const verifyToken = async (req, res, next) => {
-
     try {
-
-        const token = req.cookies.token;
-        
+        const cookieToken = req.cookies?.token;
+        const authHeader = req.headers.authorization || "";
+        const headerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+        const token = cookieToken || headerToken;
 
         if (!token) {
-
-            return res.status(401).json({
-                message: "No autenticado"
-            });
-
+            return res.status(401).json({ message: "No autenticado" });
         }
 
-        const decoded = jwt.verify(
-            token,
-            process.env.JWT_SECRET
-        );
-        console.log(decoded);
-
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const user = await User.findById(decoded.id);
-        console.log(req.user);
 
         if (!user) {
             res.clearCookie("token");
@@ -42,15 +32,9 @@ const verifyToken = async (req, res, next) => {
         };
 
         next();
-
     } catch (error) {
-
-        return res.status(401).json({
-            message: "Token inválido"
-        });
-
+        return res.status(401).json({ message: "Token inválido" });
     }
-
 };
 
 module.exports = verifyToken;

@@ -8,6 +8,7 @@ const Product = require("../models/Product");
 const verifyToken = require("../middlewares/verifyToken");
 const wsBroadcast = require("../utils/wsBroadcast");
 const { createPayPalOrder, capturePayPalOrder } = require("../utils/paypalHelper");
+const { calculateDeliveryDeadline } = require("../utils/orderFlow");
 
 /**
  * @route   POST /api/paypal/create-order
@@ -68,6 +69,23 @@ router.post("/capture-order", verifyToken, async (req, res) => {
 
         await payment.save();
 
+        for (const item of payment.productos || []) {
+            const quantity = Number(item?.quantity || 0);
+            if (quantity <= 0) continue;
+            const productDoc = await Product.findOne({ name: item.name });
+            if (!productDoc) {
+                throw new Error(`Producto no encontrado en el catálogo: ${item.name}`);
+            }
+            if ((productDoc.stock || 0) < quantity) {
+                throw new Error(`Stock insuficiente para ${item.name}`);
+            }
+            await Product.findOneAndUpdate(
+                { name: item.name },
+                { $inc: { stock: -quantity } },
+                { new: true }
+            );
+        }
+
         // Creación reactiva de la orden logística en Delivery asociada al pago
         const reactiveDelivery = new Delivery({
             paymentId: payment._id,
@@ -82,7 +100,9 @@ router.post("/capture-order", verifyToken, async (req, res) => {
                 : undefined,
             agency: payment.deliveryType === "shipping" 
                 ? "Pendiente de registro" 
-                : undefined
+                : undefined,
+            estimatedDate: calculateDeliveryDeadline(payment.fecha, payment.productos || []),
+            trackingCode: `TRK-${payment._id.toString().slice(-6).toUpperCase()}`
         });
 
         await reactiveDelivery.save();

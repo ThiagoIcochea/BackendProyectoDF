@@ -54,8 +54,16 @@ const DeliverySchema = new mongoose.Schema({
         type: String,
         default: ""
     },
+    deliveryCode: {
+        type: String,
+        default: ""
+    },
     estimatedDate: {
         type: Date
+    },
+    cancellationReason: {
+        type: String,
+        default: ""
     }
 }, {
     timestamps: true, 

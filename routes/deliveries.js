@@ -7,6 +7,8 @@ const Payment = require("../models/Payment");
 const Product = require("../models/Product");
 const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
+const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
+const User = require("../models/User");
 
 /** 
  * @route   POST /api/deliveries
@@ -160,7 +162,7 @@ router.get("/:paymentId", verifyToken, async (req, res) => {
 router.put("/:id", verifyToken, isAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { destinationAddress, reference, agency, trackingCode, estimatedDate, status } = req.body;
+        const { destinationAddress, reference, agency, trackingCode, estimatedDate, status, deliveryCode, cancellationReason } = req.body;
 
         const delivery = await Delivery.findById(id);
         if (!delivery) {
@@ -193,16 +195,35 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
 
         if (trackingCode !== undefined) delivery.trackingCode = trackingCode;
         if (estimatedDate !== undefined) delivery.estimatedDate = estimatedDate ? new Date(estimatedDate) : undefined;
+        if (deliveryCode !== undefined) delivery.deliveryCode = deliveryCode;
+        if (cancellationReason !== undefined) delivery.cancellationReason = cancellationReason;
 
         if (status !== undefined) {
-            const validStatuses = ["pending", "ready_for_pickup", "shipped", "delivered"];
+            const validStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled"];
             if (!validStatuses.includes(status)) {
                 return res.status(400).json({ message: "Estado de entrega inválido." });
             }
             delivery.status = status;
+            if (status === 'cancelled' && delivery.paymentId) {
+                const payment = await Payment.findById(delivery.paymentId);
+                if (payment?.productos?.length) {
+                    for (const item of payment.productos) {
+                        await Product.findOneAndUpdate(
+                            { name: item.name },
+                            { $inc: { stock: Number(item.quantity || 0) } }
+                        );
+                    }
+                }
+            }
         }
 
         await delivery.save();
+
+        const userDoc = await User.findById(delivery.user);
+        if (userDoc) {
+            await sendOrderUpdateEmail(userDoc, 'Actualización de tu pedido', `Tu pedido ha cambiado al estado: ${delivery.status}.\n${delivery.deliveryCode ? `Código de entrega: ${delivery.deliveryCode}` : ''}`);
+        }
+
         return res.json({ message: "Entrega actualizada con éxito.", delivery });
     } catch (error) {
         return res.status(500).json({ error: error.message });
@@ -216,8 +237,8 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
  */
 router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
     try {
-        const { status } = req.body;
-        const allowedStatuses = ["ready_for_pickup", "shipped", "delivered"];
+        const { status, deliveryCode } = req.body;
+        const allowedStatuses = ["ready_for_pickup", "shipped", "delivered", "cancelled"];
 
         if (!status || !allowedStatuses.includes(status)) {
             return res.status(400).json({
@@ -225,14 +246,37 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             });
         }
 
-        const delivery = await Delivery.findByIdAndUpdate(
-            req.params.id,
-            { $set: { status } },
-            { new: true, runValidators: true }
-        );
+        const delivery = await Delivery.findById(req.params.id);
 
         if (!delivery) {
             return res.status(404).json({ message: "Entrega no encontrada." });
+        }
+
+        if (status === "delivered") {
+            if (!deliveryCode) {
+                return res.status(400).json({ message: "Para confirmar la entrega debes ingresar el código de validación." });
+            }
+            if (String(delivery.deliveryCode || '').trim() && String(delivery.deliveryCode).trim() !== String(deliveryCode).trim()) {
+                return res.status(400).json({ message: "El código de validación no coincide." });
+            }
+            if (!delivery.deliveryCode) {
+                delivery.deliveryCode = deliveryCode;
+            }
+        }
+
+        delivery.status = status;
+        if (deliveryCode !== undefined) {
+            delivery.deliveryCode = deliveryCode;
+        }
+        await delivery.save();
+
+        if (!delivery) {
+            return res.status(404).json({ message: "Entrega no encontrada." });
+        }
+
+        const userDoc = await User.findById(delivery.user);
+        if (userDoc) {
+            await sendOrderUpdateEmail(userDoc, 'Estado de tu pedido actualizado', `Tu pedido cambió a ${status}.\n${delivery.deliveryCode ? `Código de confirmación: ${delivery.deliveryCode}` : ''}`);
         }
 
         return res.json({

@@ -9,6 +9,8 @@ const isAdmin = require("../middlewares/isAdmin");
 const Product = require("../models/Product");
 const User = require("../models/User");
 const wsBroadcast = require("../utils/wsBroadcast");
+const { calculateDeliveryDeadline, buildSlaMessage } = require("../utils/orderFlow");
+const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
 
 router.post("/", verifyToken, async (req, res) => {
     try {
@@ -16,16 +18,26 @@ router.post("/", verifyToken, async (req, res) => {
         const payment = new Payment(paymentBody);
         await payment.save();
 
-        // ANÁLISIS CRÍTICO DEL DISEÑO ANTERIOR:
-        // Los pagos exitosos se guardaban pero no generaban su respectiva orden logística en Delivery de forma reactiva.
-        // Esto causaba que el panel de administración de despachos quedara a ciegas.
-        // 
-        // CÓMO: Instanciamos y guardamos un nuevo documento 'Delivery' asociado al pago.
-        // POR QUÉ: Asegura la integridad lógica y la aparición inmediata de la orden en el dashboard logístico.
-        // Si es de tipo 'shipping', asignamos valores por defecto a los campos obligatorios para no violar 
-        // las restricciones del esquema en base de datos.
+        for (const item of payment.productos || []) {
+            const quantity = Number(item?.quantity || 0);
+            if (quantity <= 0) continue;
+            const productDoc = await Product.findOne({ name: item.name });
+            if (!productDoc) {
+                throw new Error(`Producto no encontrado en el catálogo: ${item.name}`);
+            }
+            if ((productDoc.stock || 0) < quantity) {
+                throw new Error(`Stock insuficiente para ${item.name}`);
+            }
+            await Product.findOneAndUpdate(
+                { name: item.name },
+                { $inc: { stock: -quantity } },
+                { new: true }
+            );
+        }
+
         const reactiveDelivery = new Delivery({
             paymentId: payment._id,
+            user: req.user?.id,
             deliveryType: payment.deliveryType || "shipping",
             status: "pending",
             destinationAddress: payment.deliveryType === "shipping" 
@@ -36,7 +48,9 @@ router.post("/", verifyToken, async (req, res) => {
                 : undefined,
             agency: payment.deliveryType === "shipping" 
                 ? "Pendiente de registro" 
-                : undefined
+                : undefined,
+            estimatedDate: calculateDeliveryDeadline(payment.fecha, payment.productos || []),
+            trackingCode: `TRK-${payment._id.toString().slice(-6).toUpperCase()}`
         });
 
         await reactiveDelivery.save();
@@ -125,8 +139,15 @@ router.post("/", verifyToken, async (req, res) => {
         });
 
         await nuevoLog.save();
+        const userDoc = await User.findById(req.user?.id);
+        if (userDoc) {
+            await sendOrderUpdateEmail(userDoc, 'Pago registrado en Nendoshop', `Tu compra ha sido registrada correctamente.\n${buildSlaMessage(reactiveDelivery.estimatedDate)}\nTu código de seguimiento es ${reactiveDelivery.trackingCode}.`);
+        }
+
         res.json({
-            message: "Pago registrado y auditoría guardada exitosamente"
+            message: "Pago registrado y auditoría guardada exitosamente",
+            delivery: reactiveDelivery,
+            slaMessage: buildSlaMessage(reactiveDelivery.estimatedDate)
         });
 
     } catch (error) {

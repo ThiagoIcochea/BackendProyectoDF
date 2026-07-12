@@ -20,6 +20,11 @@ const ProductSchema = new mongoose.Schema({
 
     stock: Number,
 
+    fechaEntregaPromedio: {
+        type: Number,
+        default: 3
+    },
+
     likes: {
         type: Number,
         default: 0
