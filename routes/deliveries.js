@@ -1,8 +1,10 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const router = express.Router();
 
 const Delivery = require("../models/Delivery");
 const Payment = require("../models/Payment");
+const Product = require("../models/Product");
 const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
 
@@ -36,7 +38,6 @@ router.post("/", verifyToken, async (req, res) => {
 
         const deliveryType = payment.deliveryType || "shipping";
 
-        // Validaciones condicionales según el tipo de entrega (shipping o pickup)
         if (deliveryType === "pickup") {
             if (destinationAddress || reference || agency) {
                 return res.status(400).json({
@@ -51,7 +52,6 @@ router.post("/", verifyToken, async (req, res) => {
             }
         }
 
-        // Patrón Upsert: busca entrega existente para evitar duplicidad de registros logísticos
         let delivery = await Delivery.findOne({ paymentId });
         let isNew = false;
 
@@ -60,8 +60,13 @@ router.post("/", verifyToken, async (req, res) => {
             delivery = new Delivery({
                 paymentId,
                 deliveryType,
-                status: "pending"
+                status: "pending",
+                user: req.user.id
             });
+        } else {
+            if (!delivery.user) {
+                delivery.user = req.user.id;
+            }
         }
 
         if (deliveryType === "shipping") {
@@ -69,7 +74,6 @@ router.post("/", verifyToken, async (req, res) => {
             delivery.reference = reference;
             delivery.agency = agency;
         } else {
-            // Limpieza de campos de envío para evitar datos residuales en retiro (pickup)
             delivery.destinationAddress = undefined;
             delivery.reference = undefined;
             delivery.agency = undefined;
@@ -87,7 +91,6 @@ router.post("/", verifyToken, async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error al registrar/actualizar despacho:", error);
         return res.status(500).json({ error: error.message });
     }
 });
@@ -109,6 +112,24 @@ router.get("/", verifyToken, isAdmin, async (req, res) => {
 });
 
 /**
+ * @route   GET /api/deliveries/my-orders
+ * @desc    Obtener el historial de compras/entregas del usuario logueado
+ * @access  Autenticado
+ */
+router.get("/my-orders", verifyToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const orders = await Delivery.find({ user: userId })
+            .populate("paymentId")
+            .sort({ createdAt: -1 });
+
+        return res.json(orders);
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+/**
  * @route   GET /api/deliveries/:paymentId
  * @desc    Obtener la entrega asociada a un pago en específico poblando la relación con Payment
  * @access  Autenticado
@@ -118,7 +139,7 @@ router.get("/:paymentId", verifyToken, async (req, res) => {
         const { paymentId } = req.params;
 
         const delivery = await Delivery.findOne({ paymentId }).populate("paymentId");
-        
+
         if (!delivery) {
             return res.status(404).json({
                 message: `No se encontró ninguna orden de entrega asociada al pago: ${paymentId}`
@@ -140,13 +161,12 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { destinationAddress, reference, agency, trackingCode, estimatedDate, status } = req.body;
-        
+
         const delivery = await Delivery.findById(id);
         if (!delivery) {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
-        
-        // Validaciones condicionales al editar el despacho por ID
+
         if (delivery.deliveryType === "pickup") {
             if (destinationAddress || reference || agency) {
                 return res.status(400).json({
@@ -164,8 +184,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
                 return res.status(400).json({ message: "La agencia es obligatoria para envíos a domicilio/agencia." });
             }
         }
-        
-        // Asignación de campos según el tipo de entrega omnicanal
+
         if (delivery.deliveryType === "shipping") {
             if (destinationAddress !== undefined) delivery.destinationAddress = destinationAddress;
             if (reference !== undefined) delivery.reference = reference;
@@ -174,7 +193,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
 
         if (trackingCode !== undefined) delivery.trackingCode = trackingCode;
         if (estimatedDate !== undefined) delivery.estimatedDate = estimatedDate ? new Date(estimatedDate) : undefined;
-        
+
         if (status !== undefined) {
             const validStatuses = ["pending", "ready_for_pickup", "shipped", "delivered"];
             if (!validStatuses.includes(status)) {
@@ -182,7 +201,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
             }
             delivery.status = status;
         }
-        
+
         await delivery.save();
         return res.json({ message: "Entrega actualizada con éxito.", delivery });
     } catch (error) {
@@ -206,13 +225,15 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             });
         }
 
-        const delivery = await Delivery.findById(req.params.id);
+        const delivery = await Delivery.findByIdAndUpdate(
+            req.params.id,
+            { $set: { status } },
+            { new: true, runValidators: true }
+        );
+
         if (!delivery) {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
-
-        delivery.status = status;
-        await delivery.save();
 
         return res.json({
             message: `Estado de entrega actualizado a '${status}' con éxito.`,
@@ -220,8 +241,113 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Error al actualizar estado de despacho:", error);
         return res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * @route   PUT /api/deliveries/my-orders/:id/return
+ * @desc    Procesar la devolución de un pedido (entrega, pago y stock) de forma atómica
+ * @access  Autenticado
+ */
+router.put("/my-orders/:id/return", verifyToken, async (req, res) => {
+    const session = await mongoose.startSession();
+    try {
+        let responsePayload = null;
+
+        await session.withTransaction(async () => {
+            const { id } = req.params;
+            const returnCost = Number(req.body?.returnCost) || 0;
+
+            if (returnCost < 0) {
+                const err = new Error("El costo de devolución no puede ser un número negativo.");
+                err.status = 400;
+                throw err;
+            }
+
+            const delivery = await Delivery.findById(id).session(session);
+
+            if (!delivery || !delivery.user || delivery.user.toString() !== req.user.id) {
+                const err = new Error("Pedido no encontrado o no autorizado");
+                err.status = 403;
+                throw err;
+            }
+
+            if (delivery.status !== "delivered") {
+                const err = new Error(`No se puede procesar la devolución. El estado actual de la entrega es '${delivery.status}' (debe ser 'delivered').`);
+                err.status = 400;
+                throw err;
+            }
+
+            delivery.status = "returned";
+            delivery.returnCost = returnCost;
+            await delivery.save({ session });
+
+            const payment = await Payment.findById(delivery.paymentId).session(session);
+
+            if (!payment) {
+                const err = new Error("Pago asociado no encontrado o no autorizado");
+                err.status = 404;
+                throw err;
+            }
+
+            const previousPaymentStatus = payment.estado;
+            payment.estado = "Refunded";
+            await payment.save({ session });
+
+            if (payment.productos && payment.productos.length > 0) {
+                for (const productItem of payment.productos) {
+                    const productDoc = await Product.findOne({ name: productItem.name }).session(session);
+                    if (!productDoc) {
+                        const err = new Error(`Producto no encontrado en el catálogo: ${productItem.name}`);
+                        err.status = 404;
+                        throw err;
+                    }
+                }
+
+                const bulkOps = payment.productos.map(productItem => {
+                    return {
+                        updateOne: {
+                            filter: { name: productItem.name },
+                            update: { $inc: { stock: productItem.quantity } }
+                        }
+                    };
+                });
+
+                await Product.bulkWrite(bulkOps, { session });
+            }
+
+            responsePayload = {
+                success: true,
+                message: "La orden de devolución ha sido procesada con éxito y el stock ha sido repuesto.",
+                claim: {
+                    deliveryId: delivery._id,
+                    paymentId: payment._id,
+                    status: delivery.status,
+                    returnCost: delivery.returnCost,
+                    returnedAt: delivery.updatedAt
+                },
+                paymentDetails: {
+                    previousStatus: previousPaymentStatus,
+                    newStatus: payment.estado,
+                    totalRefunded: payment.total
+                },
+                restoredProducts: payment.productos.map(productItem => ({
+                    name: productItem.name,
+                    quantityRestored: productItem.quantity
+                }))
+            };
+        });
+
+        return res.status(200).json(responsePayload);
+
+    } catch (error) {
+        return res.status(error.status || 500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        session.endSession();
     }
 });
 

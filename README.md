@@ -36,6 +36,7 @@ Este módulo maneja de forma independiente el ciclo de vida logístico y rastreo
 
 #### Esquema del Modelo (`Delivery`)
 - `paymentId`: `ObjectId` (Mapea obligatoriamente al modelo `Payment`).
+- `user`: `ObjectId` (Mapea obligatoriamente al modelo `User`). Requerido para relacionar la entrega con el cliente.
 - `deliveryType`: String (`shipping` | `pickup`). Requerido.
 - `status`: String (`pending` | `ready_for_pickup` | `shipped` | `delivered`). Por defecto es `pending`.
 - `destinationAddress`: String (Requerido solo si `deliveryType === 'shipping'`).
@@ -64,6 +65,11 @@ Las rutas del módulo están registradas bajo `/api/deliveries` en `server.js`:
    - Requiere: Administrador (`verifyToken`, `isAdmin`).
    - Entrada: JSON `{ "status": "ready_for_pickup" | "shipped" | "delivered" }`.
    - Retorna: Entrega modificada tras validar el nuevo estado logístico.
+6. **Procesar devolución de pedido:** `PUT /api/deliveries/my-orders/:id/return`
+   - Requiere: Token de autenticación (`verifyToken`).
+   - Entrada: JSON `{ "returnCost": Number }` (opcional, por defecto 0).
+   - Lógica: Ejecuta una transacción atómica para cambiar el estado de la entrega a `"returned"`, guardar el costo de devolución, cambiar el estado del pago a `"Refunded"`, y reponer el stock de productos buscando por el campo `name` debido al Feature Freeze en pagos.
+   - Retorna: Objeto JSON consolidado ("Reclamo") con información de entrega, detalles de reembolso y stock restaurado.
 
 ---
 
@@ -106,6 +112,7 @@ Para asegurar la robustez del sistema a medida que el Módulo de Entregas y la P
 1. **Webhooks de Agencias de Envío:** Integrar un sistema de recepción de webhooks de transportistas (como Olva o Shalom) para actualizar automáticamente el estado (`deliveryStatus`) y código de tracking sin intervención humana directa.
 2. **Historial de Cambios de Estado:** Crear un esquema de auditoría/logs secundario (`DeliveryLogs`) para almacenar la fecha y el usuario (o proceso automático) que realizó cada transición de estado de entrega (ej: de `pending` a `in_transit`).
 3. **Notificaciones Push o Emails en Tiempo Real:** Disparar alertas (usando WebSocket, Courier o servicios SMTP) cada vez que el estado de entrega cambie a `in_transit` o `delivered` para optimizar la experiencia de usuario.
+4. **Referenciación e Indexación de Productos en Pagos (Post-Feature Freeze):** Actualmente, el stock se repone usando el nombre del producto (`name`) debido a las restricciones de cambios en el esquema de pagos durante la congelación de características. A futuro, se debe refactorizar `PaymentSchema` para almacenar `productId` (tipo `ObjectId` con referencia a `Product`) y crear índices para búsquedas más rápidas y consistentes, eliminando riesgos de colisiones en nombres o inconsistencias al actualizar catálogos.
 
 ### Pasarela de Pagos (PayPal)
 1. **Webhooks de PayPal (Conciliación Asíncrona):** En producción, el flujo del frontend puede interrumpirse (ej. si el usuario cierra el navegador tras pagar pero antes de que se complete `capture-order`). Implementar un endpoint de Webhooks para escuchar eventos como `PAYMENT.CAPTURE.COMPLETED` asegura que el pago se registre en la base de datos de manera asíncrona y segura.

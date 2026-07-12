@@ -71,6 +71,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
         // Creación reactiva de la orden logística en Delivery asociada al pago
         const reactiveDelivery = new Delivery({
             paymentId: payment._id,
+            user: req.user.id,
             deliveryType: payment.deliveryType || "shipping",
             status: "pending",
             destinationAddress: payment.deliveryType === "shipping" 
