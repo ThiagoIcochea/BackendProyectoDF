@@ -35,3 +35,37 @@ test('canCreateClaim allows a delay claim after the SLA window', () => {
 
   assert.equal(result.allowed, true);
 });
+
+test('canCreateClaim blocks an incomplete claim before delivery', () => {
+  const result = canCreateClaim({
+    category: 'incomplete',
+    currentStatus: 'shipped',
+    deadlineDate: new Date('2026-07-06T00:00:00.000Z'),
+    existingClaims: []
+  }, new Date('2026-07-07T00:00:00.000Z'));
+
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /entregado/i);
+});
+
+test('canCreateClaim allows an incomplete claim only after delivery', () => {
+  const result = canCreateClaim({
+    category: 'incomplete',
+    currentStatus: 'delivered',
+    deadlineDate: new Date('2026-07-06T00:00:00.000Z'),
+    existingClaims: []
+  }, new Date('2026-07-07T00:00:00.000Z'));
+
+  assert.equal(result.allowed, true);
+});
+
+test('canCreateClaim allows a cancellation claim when the order has been cancelled', () => {
+  const result = canCreateClaim({
+    category: 'cancellation',
+    currentStatus: 'cancelled',
+    deadlineDate: new Date('2026-07-06T00:00:00.000Z'),
+    existingClaims: []
+  }, new Date('2026-07-07T00:00:00.000Z'));
+
+  assert.equal(result.allowed, true);
+});

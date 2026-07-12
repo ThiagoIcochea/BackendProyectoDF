@@ -55,13 +55,23 @@ const canCreateClaim = ({ category, currentStatus, deadlineDate, existingClaims 
     if (currentDate < slaDeadline) {
       return { allowed: false, reason: 'El reclamo por demora solo está habilitado 48 horas después de la fecha máxima de entrega.' };
     }
-  }
 
-  if (['pending', 'ready_for_pickup', 'shipped'].includes(normalizedStatus)) {
     return { allowed: true, reason: 'Reclamo habilitado.' };
   }
 
-  if (normalizedCategory === 'incomplete' || normalizedCategory === 'damaged' || normalizedCategory === 'cancellation') {
+  if (normalizedCategory === 'incomplete' || normalizedCategory === 'damaged') {
+    if (!['delivered', 'returned'].includes(normalizedStatus)) {
+      return { allowed: false, reason: 'El reclamo por pedido incompleto o producto dañado solo puede generarse después de que el pedido haya sido entregado o devuelto.' };
+    }
+
+    return { allowed: true, reason: 'Reclamo habilitado.' };
+  }
+
+  if (normalizedCategory === 'cancellation') {
+    if (normalizedStatus !== 'cancelled') {
+      return { allowed: false, reason: 'El reclamo por cancelación solo puede generarse cuando el pedido ya fue cancelado.' };
+    }
+
     return { allowed: true, reason: 'Reclamo habilitado.' };
   }
 
