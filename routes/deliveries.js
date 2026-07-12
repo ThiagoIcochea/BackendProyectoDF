@@ -239,7 +239,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
 router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
     try {
         const { status, deliveryCode } = req.body;
-        const allowedStatuses = ["ready_for_pickup", "shipped", "delivered", "cancelled"];
+        const allowedStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled"];
 
         if (!status || !allowedStatuses.includes(status)) {
             return res.status(400).json({

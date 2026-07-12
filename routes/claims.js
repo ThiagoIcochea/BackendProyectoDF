@@ -10,6 +10,7 @@ const verifyToken = require('../middlewares/verifyToken');
 const isAdmin = require('../middlewares/isAdmin');
 const { canCreateClaim } = require('../utils/orderFlow');
 const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
+const { evaluateClaimDescription } = require('../utils/claimReview');
 
 router.get('/my-claims', verifyToken, async (req, res) => {
   try {
@@ -49,6 +50,11 @@ router.post('/', verifyToken, async (req, res) => {
 
     if (!decision.allowed) {
       return res.status(400).json({ message: decision.reason });
+    }
+
+    const review = await evaluateClaimDescription(description, category);
+    if (!review.validClaim) {
+      return res.status(400).json({ message: review.reason });
     }
 
     const claim = new Claim({
