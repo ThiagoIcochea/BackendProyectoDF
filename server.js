@@ -81,6 +81,7 @@ app.use("/api/admin/logs", require("./routes/logs"));
 
 app.use("/api/payments", require("./routes/payments"));
 app.use("/api/chat", require("./routes/chatRoutes"));
+app.use("/api/chatbot", require("./routes/chatbot").router);
 
 app.use("/api/deliveries", require("./routes/deliveries"));
 
