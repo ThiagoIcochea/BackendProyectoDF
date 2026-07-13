@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -62,6 +62,17 @@ test('buildSupportBotReply explains its role when asked', async () => {
   const reply = await buildSupportBotReply('¿por qué haces esto?', session);
   assert.match(reply, /NendoBot/i);
   assert.match(reply, /pedidos/i);
+});
+
+test('parseOrderIntent detects purchase requests and product names', () => {
+  const result = parseOrderIntent('Quiero comprar una figura de Naruto');
+  assert.equal(result.isPurchase, true);
+  assert.match(result.productName, /naruto/i);
+});
+
+test('parseDeliveryPreference recognises pickup and shipping requests', () => {
+  assert.equal(parseDeliveryPreference('quiero recojo en tienda'), 'pickup');
+  assert.equal(parseDeliveryPreference('envío a casa'), 'shipping');
 });
 
 test('buildSupportBotReply clarifies scope for unrelated questions', async () => {

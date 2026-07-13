@@ -151,6 +151,24 @@ const extractProductHint = (text) => {
   return fallback ? fallback[1].trim() : null;
 };
 
+const parseOrderIntent = (text) => {
+  const lowered = String(text || "").toLowerCase();
+  const purchasePattern = /(quiero|quieres|necesito|busco|comprar|comprar|ordenar|adquirir|hacer un pedido)/i;
+  const productMatch = extractProductHint(text);
+  return {
+    isPurchase: purchasePattern.test(lowered),
+    productName: productMatch || "",
+    normalizedText: lowered
+  };
+};
+
+const parseDeliveryPreference = (text) => {
+  const lowered = String(text || "").toLowerCase();
+  if (/(recojo|recoger|retirar|tienda|pickup|pick up)/i.test(lowered)) return "pickup";
+  if (/(env[ií]o|envio|casa|domicilio|shipping|delivery)/i.test(lowered)) return "shipping";
+  return null;
+};
+
 const extractSurveyRating = (text) => {
   const numMatch = text.match(/\b([1-5])\b/);
   if (numMatch) return Number(numMatch[1]);
@@ -688,6 +706,8 @@ module.exports = {
   extractOrderNumber,
   extractProductHint,
   findProductsByHint,
+  parseOrderIntent,
+  parseDeliveryPreference,
   moderateCommunityMessage,
   analyzeMessageWithGroq 
 };
