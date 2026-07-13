@@ -9,7 +9,7 @@ const Payment = require("../models/Payment");
 const Product = require("../models/Product");
 const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
-const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
+const { sendOrderUpdateEmail, sendVerificationCodeEmail } = require("../utils/emailNotifications");
 const User = require("../models/User");
 const { ensureDeliveryCode } = require("../utils/deliveryCode");
 const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
@@ -25,19 +25,21 @@ const generateTempToken = () => crypto.randomBytes(24).toString("hex");
 const sendActionMfaCode = async (user, code, method = "email") => {
     const selectedMethod = String(method || "email").toLowerCase();
 
-    if (selectedMethod === "console" || !resendClient) {
+    if (selectedMethod === "console") {
         console.log(`[MFA cancelacion] Codigo para ${user.email}: ${code}`);
         return { sentBy: "console" };
     }
 
-    const from = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
-    await resendClient.emails.send({
-        from,
-        to: user.email,
-        subject: "Codigo para cancelar tu pedido - Nendoshop",
-        text: `Hola ${user.name || user.email}, tu codigo para cancelar el pedido es: ${code}. Expira en 5 minutos.`,
-        html: `<p>Hola ${user.name || user.email},</p><p>Tu codigo para cancelar el pedido es:</p><h2>${code}</h2><p>Expira en 5 minutos. Si no solicitaste esta accion, ignora este mensaje.</p>`
+    const result = await sendVerificationCodeEmail(user, code, {
+        subject: "Código para cancelar tu pedido - Nendoshop",
+        title: "Confirmación de cancelación",
+        description: "Tu código para confirmar la cancelación del pedido es:"
     });
+
+    if (!result.sent) {
+        return { sentBy: "email", error: true, reason: result.reason, message: result.message };
+    }
+
     return { sentBy: "email" };
 };
 
@@ -552,7 +554,10 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
         const code = generateCode();
         const tempToken = generateTempToken();
         const now = new Date();
-        await sendActionMfaCode(user, code, safeMethod);
+        const emailResult = await sendActionMfaCode(user, code, safeMethod);
+        if (emailResult?.error) {
+            return res.status(502).json({ message: emailResult.message || "No se pudo enviar el código de verificación." });
+        }
 
         user.twoFactorCode = code;
         user.twoFactorMethod = safeMethod === "console" ? "console" : safeMethod;

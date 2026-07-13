@@ -200,9 +200,17 @@ const parseProfileChangeRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
 
-  const phoneMatch = normalized.match(/(?:tel(?:é|e)fono|telefono|phone|celular)[^0-9+]*([0-9+\-\s]{4,})/i);
-  if (phoneMatch) {
-    return { kind: "phone", newValue: phoneMatch[1].trim() };
+  const phonePatterns = [
+    /(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)[^0-9+]*([0-9+\-\s]{4,})/i,
+    /(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cámbiame|cambie|cambiamelo)(?:\s|[^a-záéíóúñü])*?(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
+    /(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)(?:\s|[^a-záéíóúñü])*?(?:a|al|nuevo|nueva|por|:)?(?:\s*)([0-9+\-\s]{4,})/i
+  ];
+
+  for (const pattern of phonePatterns) {
+    const phoneMatch = normalized.match(pattern);
+    if (phoneMatch?.[1]) {
+      return { kind: "phone", newValue: phoneMatch[1].trim() };
+    }
   }
 
   const passwordMatch = normalized.match(/(?:contrase(?:ñ|n)a|password)[^\w]*?(?:a|al|nueva|nuevo)?[^\w]*([A-Za-z0-9!@#$%^&*()_+=\-]{4,})/i);
@@ -376,11 +384,22 @@ const findMostExpensiveProduct = async () => {
   }
 };
 
+const getDisplayPrice = (product) => {
+  const price = Number(product?.price || 0);
+  const discount = Number(product?.discount || 0);
+  if (discount > 0) {
+    const discounted = price * (1 - discount);
+    return Number(discounted.toFixed(2));
+  }
+  return Number(price.toFixed(2));
+};
+
 const toProductFact = (product) => ({
   nombre: product.name,
-  precio: product.price || 0,
+  precio: getDisplayPrice(product),
+  precio_original: Number(product.price || 0),
   stock: product.stock || 0,
-  descuento: product.discount || 0,
+  descuento: Number(product.discount || 0),
   comentarios: (product.comments || []).slice(-3).map((comment) => comment.text).filter(Boolean),
   enlace: buildProductLink(product._id)
 });
@@ -769,7 +788,15 @@ const handleAutomationCommand = async (text, session) => {
   if (/(productos|catalogo|catálogo|stock|inventario|figuras)/i.test(normalized)) {
     const products = await Product.find().limit(10).lean().catch(() => []);
     if (!products.length) return "No encuentro productos disponibles en este momento.";
-    return products.map((product) => `${product.name} - S/. ${product.price || 0} - stock ${product.stock || 0}`).join("\n");
+    return products.map((product) => {
+      const price = Number(product.price || 0);
+      const discount = Number(product.discount || 0);
+      if (discount > 0) {
+        const discountedPrice = (price * (1 - discount)).toFixed(2);
+        return `${product.name} - precio final S/. ${discountedPrice} (precio original S/. ${price.toFixed(2)} | descuento ${Math.round(discount * 100)}%) - stock ${product.stock || 0}`;
+      }
+      return `${product.name} - S/. ${price.toFixed(2)} - stock ${product.stock || 0}`;
+    }).join("\n");
   }
 
   if (/(perfil|mis datos|datos|nombre|apellido|dirección|direccion|ciudad|teléfono|telefono)/i.test(normalized)) {
@@ -828,7 +855,15 @@ const handleAutomationCommand = async (text, session) => {
   if (context.intent === "productos" || context.intent === "carrito") {
     const products = await findProductsByHint(context.productHint || normalized);
     if (products.length) {
-      const productNames = products.map((product) => `${product.name} | precio S/. ${product.price || 0} | stock ${product.stock || 0}${Number(product.discount || 0) > 0 ? ` | descuento ${Math.round(Number(product.discount || 0) * 100)}%` : ""}`).join("\n");
+      const productNames = products.map((product) => {
+        const price = Number(product.price || 0);
+        const discount = Number(product.discount || 0);
+        if (discount > 0) {
+          const discountedPrice = (price * (1 - discount)).toFixed(2);
+          return `${product.name} | precio final S/. ${discountedPrice} | precio original S/. ${price.toFixed(2)} | descuento ${Math.round(discount * 100)}% | stock ${product.stock || 0}`;
+        }
+        return `${product.name} | precio S/. ${price.toFixed(2)} | stock ${product.stock || 0}`;
+      }).join("\n");
       return `Tengo estos productos que coinciden con tu consulta:\n${productNames}`;
     }
   }

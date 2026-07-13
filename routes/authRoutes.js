@@ -16,6 +16,7 @@ const User = require("../models/User");
 const verifyToken = require("../middlewares/verifyToken");
 const { recordLog } = require("../utils/logger");
 const { validateRegistrationPayload, validateProfilePayload } = require("../utils/validation");
+const { sendVerificationCodeEmail } = require("../utils/emailNotifications");
 
 const OTP_EXPIRE_MS = 5 * 60 * 1000;
 const RESEND_WAIT_MS = 30 * 1000;
@@ -71,52 +72,17 @@ const sendTwoFactorCode = async (user, method, code) => {
   const sendMethod = method || "email";
 
   if (sendMethod === "email") {
-    const html = generateEmailHtml(user.name || user.email, code);
-    const from = getResendFromAddress();
-    const to = user.email;
-    const replyTo = from || "noreply@localhost";
-    const text = `Hola ${user.name || user.email},\n\nTu código de verificación es: ${code}.\n\nSi no solicitaste este código, ignora este mensaje.`;
+    const result = await sendVerificationCodeEmail(user, code, {
+      subject: 'Código de verificación - Nendoshop',
+      title: 'Verificación de seguridad',
+      description: 'Usa el siguiente código de verificación para continuar.'
+    });
 
-    if (!resendClient) {
-      console.error('[2FA] RESEND_API_KEY no configurada; no se pudo enviar el correo');
-      return { sentBy: 'email', error: true, reason: 'missing_api_key', message: 'No se pudo enviar el correo porque la clave de Resend no está configurada.' };
+    if (!result.sent) {
+      return { sentBy: 'email', error: true, reason: result.reason || 'resend_error', message: result.message || 'No se pudo enviar el correo de verificación.' };
     }
 
-    if (!from) {
-      console.error('[2FA] No hay remitente verificado en Resend para enviar correos');
-      return {
-        sentBy: 'email',
-        error: true,
-        reason: 'unverified_sender',
-        message: 'No se pudo enviar el correo porque el remitente no está verificado en Resend. Configura RESEND_FROM_EMAIL con un dominio verificado, por ejemplo: no-reply@tu-dominio.com.'
-      };
-    }
-
-    try {
-      const { data } = await resendClient.emails.send({
-        from,
-        to,
-        replyTo, 
-        subject: 'Código de verificación - Nendoshop',
-        text,
-        html,
-      });
-
-      console.log('[2FA] Email enviado:', data);
-      return { sentBy: 'email', data };
-    } catch (err) {
-      const errorMessage = err?.message || "Error desconocido al enviar el correo";
-      console.error('[2FA] Error al enviar email con Resend', errorMessage);
-      console.log(`[2FA] fallback código: ${code}`);
-      return {
-        sentBy: 'email',
-        error: true,
-        reason: 'resend_error',
-        message: errorMessage.includes('domain') || errorMessage.includes('testing')
-          ? 'Resend rechazó el envío por restricciones del remitente o del dominio. Verifica el remitente en Resend.'
-          : 'No se pudo enviar el correo de verificación.'
-      };
-    }
+    return { sentBy: 'email', data: result };
   }
 
   if (!user.phone) {

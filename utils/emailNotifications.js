@@ -9,32 +9,69 @@ const getFromAddress = () => {
   return 'onboarding@resend.dev';
 };
 
-const sendOrderUpdateEmail = async (user, subject, message) => {
-  if (!user?.email) return { sent: false, reason: 'missing_email' };
+const sendEmail = async ({ to, subject, text, html }) => {
+  if (!to) return { sent: false, reason: 'missing_email' };
 
   if (!resendClient) {
-    console.log(`[email] ${subject} -> ${user.email}: ${message}`);
-    return { sent: false, reason: 'missing_resend' };
+    console.log(`[email] ${subject} -> ${to}: ${text}`);
+    return { sent: false, reason: 'missing_resend', message: 'No se pudo enviar el correo porque la clave de Resend no está configurada.' };
   }
 
   try {
+    const from = getFromAddress();
     const { data, error } = await resendClient.emails.send({
-      from: getFromAddress(),
-      to: [user.email],
+      from,
+      to: [to],
       subject,
-      html: `<p>${message.replace(/\n/g, '<br />')}</p>`
+      text,
+      html
     });
 
     if (error) {
       console.error('[email] resend error', error);
-      return { sent: false, reason: 'resend_error' };
+      return { sent: false, reason: 'resend_error', message: 'Resend rechazó el envío del correo.' };
     }
 
     return { sent: true, id: data?.id };
   } catch (error) {
     console.error('[email] send failure', error);
-    return { sent: false, reason: 'exception' };
+    return { sent: false, reason: 'exception', message: error?.message || 'No se pudo enviar el correo.' };
   }
 };
 
-module.exports = { getFromAddress, sendOrderUpdateEmail };
+const sendOrderUpdateEmail = async (user, subject, message) => {
+  if (!user?.email) return { sent: false, reason: 'missing_email' };
+  return sendEmail({
+    to: user.email,
+    subject,
+    text: message,
+    html: `<p>${message.replace(/\n/g, '<br />')}</p>`
+  });
+};
+
+const sendVerificationCodeEmail = async (user, code, { subject = 'Código de verificación - Nendoshop', title = 'Verificación de seguridad', description = 'Tu código de verificación es:' } = {}) => {
+  if (!user?.email) return { sent: false, reason: 'missing_email' };
+
+  const html = `
+    <div style="font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;">
+      <div style="max-width:560px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:10px;">
+        <h2 style="color:#9333EA;margin-bottom:8px;">${title}</h2>
+        <p>Hola ${user.name || user.email},</p>
+        <p>${description}</p>
+        <div style="text-align:center;padding:20px 0;">
+          <div style="display:inline-block;padding:16px 24px;border-radius:8px;background:#f7f7fb;border:2px dashed #9333EA;font-size:22px;letter-spacing:4px;font-weight:700;color:#9333EA;">${code}</div>
+        </div>
+        <p style="font-size:13px;color:#666;">Este código expira en 5 minutos. Si no solicitaste esta acción, ignora este mensaje.</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    to: user.email,
+    subject,
+    text: `Hola ${user.name || user.email},\n\n${description}\n${code}\n\nEste código expira en 5 minutos.`,
+    html
+  });
+};
+
+module.exports = { getFromAddress, sendOrderUpdateEmail, sendVerificationCodeEmail };

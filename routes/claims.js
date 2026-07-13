@@ -9,7 +9,7 @@ const User = require('../models/User');
 const verifyToken = require('../middlewares/verifyToken');
 const isAdmin = require('../middlewares/isAdmin');
 const { canCreateClaim } = require('../utils/orderFlow');
-const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
+const { sendOrderUpdateEmail, sendVerificationCodeEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
 const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
 const { recordLog } = require('../utils/logger');
@@ -23,19 +23,21 @@ const resendClient = process.env.RESEND_API_KEY ? new (require('resend').Resend)
 
 const sendActionMfaCode = async (user, code, method = 'email') => {
   const selectedMethod = String(method || 'email').toLowerCase();
-  if (selectedMethod === 'console' || !resendClient) {
+  if (selectedMethod === 'console') {
     console.log(`[MFA reclamo] Código para ${user.email}: ${code}`);
     return { sentBy: 'console' };
   }
 
-  const from = (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
-  await resendClient.emails.send({
-    from,
-    to: user.email,
+  const result = await sendVerificationCodeEmail(user, code, {
     subject: 'Código para confirmar la cancelación del pedido - Nendoshop',
-    text: `Hola ${user.name || user.email}, tu código para confirmar la cancelación es: ${code}. Expira en 5 minutos.`,
-    html: `<p>Hola ${user.name || user.email},</p><p>Tu código para confirmar la cancelación es:</p><h2>${code}</h2><p>Expira en 5 minutos. Si no solicitaste esta acción, ignora este mensaje.</p>`
+    title: 'Confirmación de cancelación',
+    description: 'Tu código para confirmar la cancelación del pedido es:'
   });
+
+  if (!result.sent) {
+    return { sentBy: 'email', error: true, reason: result.reason, message: result.message };
+  }
+
   return { sentBy: 'email' };
 };
 

@@ -134,6 +134,10 @@ test('parseProfileChangeRequest understands natural language for phone and passw
   assert.equal(phoneChange.kind, 'phone');
   assert.equal(phoneChange.newValue, '987654321');
 
+  const numberChange = parseProfileChangeRequest('cámbiame el número a 987654321');
+  assert.equal(numberChange.kind, 'phone');
+  assert.equal(numberChange.newValue, '987654321');
+
   const passwordChange = parseProfileChangeRequest('cambia mi contraseña a MiNuevaClave123!');
   assert.equal(passwordChange.kind, 'password');
   assert.equal(passwordChange.newPassword, 'MiNuevaClave123!');
