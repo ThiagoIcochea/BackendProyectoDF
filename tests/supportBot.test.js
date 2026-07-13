@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod, extractRequestedMfaMethod } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod, extractRequestedMfaMethod, parseClaimRequest, parseCheckoutIntent } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -161,4 +161,17 @@ test('extractRequestedMfaMethod ignores casing and picks the requested channel',
   assert.equal(extractRequestedMfaMethod('hola cambia mi celular a 968085026 por SMS'), 'sms');
   assert.equal(extractRequestedMfaMethod('cambia mi contraseña por WhatsApp'), 'whatsapp');
   assert.equal(extractRequestedMfaMethod('envíame el código por LlAmAdA'), 'call');
+});
+
+test('parseClaimRequest extracts the order and issue category from a claim request', () => {
+  const parsed = parseClaimRequest('quiero hacer un reclamo por mi pedido 123456 por demora');
+  assert.equal(parsed.orderNumber, '123456');
+  assert.equal(parsed.category, 'delay');
+  assert.match(parsed.description, /demora/i);
+});
+
+test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
+  const parsed = parseCheckoutIntent('crea un pedido con envío a casa');
+  assert.equal(parsed.kind, 'checkout');
+  assert.equal(parsed.deliveryType, 'shipping');
 });

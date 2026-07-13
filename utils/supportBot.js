@@ -205,6 +205,32 @@ const extractRequestedMfaMethod = (text) => {
   return normalizeMfaMethod(explicitMethod ? explicitMethod[1] : "email");
 };
 
+const parseClaimRequest = (text) => {
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+  const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero)[^0-9]*(\d{2,})/i);
+  const categoryMatch = normalized.match(/\b(demora|retraso|incompleto|dañado|dañado|devuelta|devoluci[oó]n|cancelaci[oó]n|cancelar|fallo|error)\b/i);
+  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una)\s+/gi, " ").trim();
+  return {
+    orderNumber: orderMatch?.[1] || null,
+    category: categoryMatch ? CLAIM_CATEGORY_ALIASES[String(categoryMatch[1]).toLowerCase()] || "delay" : "delay",
+    description: description || "Reclamo generado por el asistente"
+  };
+};
+
+const parseCheckoutIntent = (text) => {
+  const normalized = String(text || "").trim();
+  if (!/(crear|generar|hacer|armar|confirmar).*(pedido|orden|compra)/i.test(normalized) && !/(pedido|orden|compra).*(crear|generar|hacer|armar|confirmar)/i.test(normalized)) {
+    return null;
+  }
+  const deliveryType = parseDeliveryPreference(normalized);
+  return {
+    kind: "checkout",
+    deliveryType: deliveryType || "shipping",
+    text: normalized
+  };
+};
+
 const parseProfileChangeRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
@@ -563,6 +589,42 @@ const handleProfileUpdateRequest = async (text, session) => {
   if (!user) return null;
 
   const parsedUpdate = parseProfileChangeRequest(normalized);
+  if (/^(\d{6})$/.test(normalized.trim()) && session.pendingMfaAction?.status === "waiting_for_code") {
+    const pending = session.pendingMfaAction;
+    const user = await User.findById(session.userId).catch(() => null);
+    if (!user) return "No puedo validar el código sin tu cuenta.";
+    const ok = await verifyActionMfa(user, pending.tempToken, normalized.trim());
+    if (!ok) return "El código no es válido o ya expiró. Solicita uno nuevo para continuar.";
+    if (pending.type === "phone_change") {
+      user.phone = pending.newValue;
+      await user.save();
+      session.pendingMfaAction = null;
+      return "Listo, actualicé tu teléfono y quedó verificado con MFA.";
+    }
+    if (pending.type === "password_change") {
+      const newPassword = pending.newPassword;
+      user.password = await bcrypt.hash(newPassword, 10);
+      await user.save();
+      session.pendingMfaAction = null;
+      return "Listo, cambié tu contraseña correctamente y quedó verificada con MFA.";
+    }
+    if (pending.type === "cancel_order") {
+      const delivery = await Delivery.findById(pending.deliveryId).catch(() => null);
+      if (!delivery) return "No encontré ese pedido para cancelarlo.";
+      if (!(["pending", "ready_for_pickup"].includes(delivery.status))) {
+        session.pendingMfaAction = null;
+        return `El pedido ya no se puede cancelar porque está en estado ${delivery.status}.`;
+      }
+      delivery.status = "cancelled";
+      delivery.cancellationReason = "Cancelado por el asistente con MFA";
+      syncStatusHistory(delivery, "cancelled", { note: delivery.cancellationReason });
+      await delivery.save();
+      await recordLog({ req: { user: { id: session.userId, email: user.email } }, usuario: user.email, descripcion: `Pedido ${delivery._id} cancelado por asistente`, tipo: "PEDIDO", metodo: "BOT", ruta: "/chatbot" });
+      session.pendingMfaAction = null;
+      return "Listo, cancelé tu pedido y quedó marcado como cancelado.";
+    }
+  }
+
   if (parsedUpdate?.kind === "password") {
     const pending = session.pendingMfaAction || null;
     if (pending?.type === "password_change" && pending.status === "waiting_for_code") {
@@ -654,6 +716,86 @@ const handleProfileUpdateRequest = async (text, session) => {
   }
 
   return "Puedo actualizar tu perfil. Díme qué dato quieres cambiar y el nuevo valor, por ejemplo: cambia mi dirección a Av. Siempre Viva 123.";
+};
+
+const handleCheckoutRequest = async (text, session) => {
+  if (!session?.userId) return null;
+  const normalized = String(text || "").trim();
+  const checkoutIntent = parseCheckoutIntent(normalized);
+  if (!checkoutIntent) return null;
+
+  const user = await User.findById(session.userId).catch(() => null);
+  if (!user) return "No encuentro tu cuenta para iniciar el pedido.";
+
+  const pending = session.pendingMfaAction || null;
+  if (pending?.type === "checkout" && pending.status === "waiting_for_payment_method") {
+    const method = /paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null;
+    if (!method) return "Dime si pagarás con PayPal o con tarjeta.";
+    session.pendingMfaAction = { ...pending, paymentMethod: method, status: "waiting_for_confirmation" };
+    return method === "paypal" ? "Perfecto, prepararé el pedido con PayPal. Si quieres, te puedo ayudar a completar la orden con los datos necesarios y te indico el siguiente paso." : "Perfecto, prepararé el pedido con tarjeta. Si tienes una tarjeta guardada, la usaré; si no, te pediré los datos.";
+  }
+
+  if (pending?.type === "checkout" && pending.status === "waiting_for_confirmation") {
+    const confirmed = /si|sí|confirmo|acepto|ok|listo|crear|generar|hacer/i.test(normalized);
+    if (!confirmed) return "Confirma si deseas generar el pedido ahora.";
+    const paymentPayload = {
+      cliente: user.name || user.email,
+      documento: `BOT-${Date.now().toString().slice(-6)}`,
+      productos: session.cartItems || [],
+      total: (session.cartItems || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0),
+      deliveryType: pending.deliveryType,
+      direccion_entrega: pending.deliveryType === "shipping" ? pending.address || "Pendiente" : undefined,
+      referencia: pending.deliveryType === "shipping" ? pending.reference || "Pendiente" : undefined,
+      metodo_envio: pending.deliveryType === "shipping" ? "delivery" : "recojo",
+      estado: "Pagado"
+    };
+    const payment = await Payment.create(paymentPayload);
+    await Delivery.create({
+      paymentId: payment._id,
+      user: session.userId,
+      deliveryType: pending.deliveryType,
+      status: "pending",
+      statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido creado por asistente" }],
+      destinationAddress: pending.deliveryType === "shipping" ? pending.address || "Pendiente" : undefined,
+      reference: pending.deliveryType === "shipping" ? pending.reference || "Pendiente" : undefined,
+      agency: pending.deliveryType === "shipping" ? pending.agency || "Pendiente" : undefined
+    });
+    session.pendingMfaAction = null;
+    session.cartItems = [];
+    return `Listo, generé el pedido con ${pending.deliveryType === "shipping" ? "envío a domicilio" : "recojo en tienda"}. El número de pedido es ${payment.documento}.`;
+  }
+
+  const deliveryType = checkoutIntent.deliveryType;
+  session.pendingMfaAction = { type: "checkout", status: "waiting_for_payment_method", deliveryType, address: null, reference: null, agency: null };
+  return `Perfecto, voy a preparar tu pedido con ${deliveryType === "shipping" ? "envío a domicilio" : "recojo en tienda"}. ¿Deseas pagar con PayPal o con tarjeta?`;
+};
+
+const handleClaimRequest = async (text, session) => {
+  if (!session?.userId) return null;
+  const normalized = String(text || "").trim();
+  const parsed = parseClaimRequest(normalized);
+  if (!parsed) return null;
+
+  const user = await User.findById(session.userId).catch(() => null);
+  if (!user) return "No encuentro tu cuenta para generar un reclamo.";
+
+  const delivery = parsed.orderNumber ? await Delivery.findOne({ user: session.userId, paymentId: { $exists: true } }).populate("paymentId").lean().catch(() => null) : null;
+  if (!delivery) {
+    return "No encontré un pedido asociado a tu cuenta para registrar el reclamo. Si me compartes el número de pedido exacto, te ayudo mejor.";
+  }
+
+  const category = parsed.category;
+  const description = parsed.description || "Reclamo generado por el asistente";
+  const claim = await Claim.create({
+    delivery: delivery._id,
+    payment: delivery.paymentId?._id,
+    user: session.userId,
+    category,
+    description,
+    resolution: "pending",
+    status: "pending"
+  });
+  return `Listo, registré un reclamo para el pedido ${String(delivery._id).slice(-6).toUpperCase()} con categoría ${category}. Quedó pendiente de revisión.`;
 };
 
 const handleCancelOrderRequest = async (text, session) => {
@@ -1187,6 +1329,20 @@ const getSupportBotReply = async (input, session) => {
     }
   }
 
+  const checkoutReply = await handleCheckoutRequest(text, session);
+  if (checkoutReply) {
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", checkoutReply);
+    return checkoutReply;
+  }
+
+  const claimReply = await handleClaimRequest(text, session);
+  if (claimReply) {
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", claimReply);
+    return claimReply;
+  }
+
   const profileReply = await handleProfileUpdateRequest(text, session);
   if (profileReply) {
     const lastUserText = session.history?.slice(-1)[0]?.text;
@@ -1316,6 +1472,8 @@ module.exports = {
   analyzeMessageWithGroq,
   rankProductMatches,
   parseProfileChangeRequest,
+  parseClaimRequest,
+  parseCheckoutIntent,
   normalizeMfaMethod,
   extractRequestedMfaMethod
 };
