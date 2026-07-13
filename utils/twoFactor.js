@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const https = require("https");
 const { sendVerificationCodeEmail } = require("./emailNotifications");
 
 const OTP_EXPIRE_MS = 5 * 60 * 1000;
@@ -7,7 +8,8 @@ const normalizeMfaMethod = (value) => {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "email";
   if (["correo", "email", "mail"].includes(raw)) return "email";
-  if (["sms", "mensaje", "texto", "whatsapp", "wa"].includes(raw)) return "whatsapp";
+  if (["sms", "mensaje", "texto"].includes(raw)) return "sms";
+  if (["whatsapp", "wa"].includes(raw)) return "whatsapp";
   if (["llamada", "call", "telefono"].includes(raw)) return "call";
   if (["console", "consola"].includes(raw)) return "console";
   return raw;
@@ -35,6 +37,46 @@ const getPendingMfaState = (user) => ({
   method: user?.twoFactorMethod
 });
 
+const sendTwoFactorCode = async (user, method, code) => {
+  const safeMethod = normalizeMfaMethod(method || "email");
+
+  if (safeMethod === "email") {
+    const result = await sendVerificationCodeEmail(user, code, {
+      subject: "Código de verificación - Nendoshop",
+      title: "Verificación de seguridad",
+      description: "Usa el siguiente código de verificación para continuar."
+    });
+
+    if (!result.sent) {
+      return { sentBy: "email", error: true, reason: result.reason || "resend_error", message: result.message || "No se pudo enviar el código por correo." };
+    }
+
+    return { sentBy: "email", data: result };
+  }
+
+  if (safeMethod === "console") {
+    return { sentBy: "console" };
+  }
+
+  if (!user?.phone) {
+    return { sentBy: safeMethod, error: true, message: "No hay teléfono configurado para este método." };
+  }
+
+  const macroMethod = safeMethod === "whatsapp" ? "wtsp" : safeMethod === "call" ? "call" : safeMethod === "sms" ? "sms" : "email";
+  const nombre = encodeURIComponent(user.name || user.email || "Cliente");
+  const numero = encodeURIComponent(String(user.phone));
+  const url = `https://trigger.macrodroid.com/543902b9-9627-4797-833f-8ab08ee4a3ec/otp?nombre=${nombre}&numero=${numero}&metodo=${macroMethod}&codigo=${code}`;
+
+  return new Promise((resolve) => {
+    https.get(url, (res) => {
+      res.on("data", () => {});
+      res.on("end", () => resolve({ sentBy: safeMethod }));
+    }).on("error", (err) => {
+      resolve({ sentBy: safeMethod, error: true, message: err?.message || "No se pudo enviar el código por el canal seleccionado." });
+    });
+  });
+};
+
 const issueActionMfa = async (user, method = "email", options = {}) => {
   if (!user) return { tempToken: null, error: true, message: "Usuario no encontrado." };
 
@@ -44,26 +86,9 @@ const issueActionMfa = async (user, method = "email", options = {}) => {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + (options.expiresInMs || OTP_EXPIRE_MS));
 
-  if (safeMethod === "console") {
-    user.twoFactorCode = code;
-    user.twoFactorMethod = "console";
-    user.twoFactorTempToken = tempToken;
-    user.twoFactorExpires = expiresAt;
-    user.twoFactorLastSentAt = now;
-    user.twoFactorAttempts = 0;
-    user.twoFactorBlockedUntil = null;
-    await user.save();
-    return { tempToken, sentBy: "console" };
-  }
-
-  const emailResult = await sendVerificationCodeEmail(user, code, {
-    subject: options.subject || "Código de verificación - Nendoshop",
-    title: options.title || "Verificación de seguridad",
-    description: options.description || "Tu código de verificación es:"
-  });
-
-  if (!emailResult.sent) {
-    return { tempToken, sentBy: "email", error: true, message: emailResult.message || "No se pudo enviar el código por correo." };
+  const deliveryResult = await sendTwoFactorCode(user, safeMethod, code);
+  if (deliveryResult?.error) {
+    return { tempToken, sentBy: safeMethod, error: true, message: deliveryResult.message || "No se pudo enviar el código de verificación." };
   }
 
   user.twoFactorCode = code;
@@ -75,7 +100,7 @@ const issueActionMfa = async (user, method = "email", options = {}) => {
   user.twoFactorBlockedUntil = null;
   await user.save();
 
-  return { tempToken, sentBy: "email" };
+  return { tempToken, sentBy: safeMethod };
 };
 
 const verifyActionMfa = async (user, tempToken, code) => {
