@@ -1,22 +1,40 @@
 const STATUS_ORDER = ["pending", "shipped", "ready_for_pickup", "delivered", "cancelled", "returned"];
 
 const STATUS_TRANSITIONS = {
-  pending: ["shipped", "cancelled"],
-  shipped: ["ready_for_pickup", "cancelled"],
-  ready_for_pickup: ["delivered", "cancelled"],
-  delivered: ["returned"],
-  cancelled: [],
-  returned: []
+  pending: {
+    shipping: ["shipped", "cancelled"],
+    pickup: ["ready_for_pickup", "cancelled"]
+  },
+  shipped: {
+    shipping: ["delivered", "cancelled"],
+    pickup: []
+  },
+  ready_for_pickup: {
+    pickup: ["delivered", "cancelled"],
+    shipping: []
+  },
+  delivered: {
+    shipping: ["returned"],
+    pickup: ["returned"]
+  },
+  cancelled: {},
+  returned: {}
 };
 
 const normalizeStatus = (status) => String(status || "").trim().toLowerCase();
-
-const getAllowedNextStatuses = (currentStatus) => {
-  const normalized = normalizeStatus(currentStatus);
-  return STATUS_TRANSITIONS[normalized] || [];
+const normalizeDeliveryType = (deliveryType) => {
+  const normalized = normalizeStatus(deliveryType);
+  if (normalized === "pickup" || normalized === "presencial") return "pickup";
+  return "shipping";
 };
 
-const isValidStatusTransition = (currentStatus, nextStatus) => {
+const getAllowedNextStatuses = (currentStatus, deliveryType = "shipping") => {
+  const normalized = normalizeStatus(currentStatus);
+  const mode = normalizeDeliveryType(deliveryType);
+  return STATUS_TRANSITIONS[normalized]?.[mode] || [];
+};
+
+const isValidStatusTransition = (currentStatus, nextStatus, deliveryType = "shipping") => {
   if (!currentStatus || !nextStatus) return false;
 
   const normalizedCurrent = normalizeStatus(currentStatus);
@@ -30,7 +48,7 @@ const isValidStatusTransition = (currentStatus, nextStatus) => {
     return true;
   }
 
-  return getAllowedNextStatuses(normalizedCurrent).includes(normalizedNext);
+  return getAllowedNextStatuses(normalizedCurrent, deliveryType).includes(normalizedNext);
 };
 
 const getStatusLabel = (status) => {

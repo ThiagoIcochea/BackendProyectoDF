@@ -14,6 +14,7 @@ const User = require("../models/User");
 const { ensureDeliveryCode } = require("../utils/deliveryCode");
 const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
 const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require("../utils/deliveryStatusFlow");
+const { recordLog } = require("../utils/logger");
 
 const OTP_EXPIRE_MS = 5 * 60 * 1000;
 const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -334,9 +335,12 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
 
-        if (!isValidStatusTransition(delivery.status, status)) {
+        const payment = delivery.paymentId ? await Payment.findById(delivery.paymentId) : null;
+        const deliveryType = delivery.deliveryType || payment?.deliveryType || "shipping";
+
+        if (!isValidStatusTransition(delivery.status, status, deliveryType)) {
             return res.status(400).json({
-                message: `No puedes avanzar desde '${getStatusLabel(delivery.status)}' hacia '${getStatusLabel(status)}'. Los cambios permitidos son: ${getAllowedNextStatuses(delivery.status).map(getStatusLabel).join(", ") || "ninguno"}.`
+                message: `No puedes avanzar desde '${getStatusLabel(delivery.status)}' hacia '${getStatusLabel(status)}'. Los cambios permitidos son: ${getAllowedNextStatuses(delivery.status, deliveryType).map(getStatusLabel).join(", ") || "ninguno"}.`
             });
         }
 
@@ -389,6 +393,14 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             await restockPaymentProducts(delivery.paymentId);
         }
         await delivery.save();
+        await recordLog({
+            req,
+            usuario: req.user?.email || req.user?.name || "admin",
+            descripcion: `Estado de pedido actualizado a ${status} para ${delivery._id}`,
+            tipo: "PEDIDO",
+            metodo: req.method,
+            ruta: req.originalUrl
+        });
 
         if (!delivery) {
             return res.status(404).json({ message: "Entrega no encontrada." });
@@ -547,6 +559,15 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
         user.twoFactorBlockedUntil = null;
         await user.save();
 
+        await recordLog({
+            req,
+            usuario: req.user?.email || req.user?.name || "usuario",
+            descripcion: `Solicitud de cancelación de pedido ${delivery._id}`,
+            tipo: "PEDIDO",
+            metodo: req.method,
+            ruta: req.originalUrl
+        });
+
         return res.json({
             twoFactorRequired: true,
             tempToken,
@@ -608,6 +629,15 @@ router.post("/my-orders/:id/cancel/confirm", verifyToken, async (req, res) => {
             user.twoFactorLastSentAt = null;
             user.twoFactorMethod = null;
             await user.save({ session });
+
+            await recordLog({
+                req,
+                usuario: req.user?.email || req.user?.name || "usuario",
+                descripcion: `Pedido ${delivery._id} cancelado correctamente`,
+                tipo: "PEDIDO",
+                metodo: req.method,
+                ruta: req.originalUrl
+            });
 
             responsePayload = { message: "Pedido cancelado correctamente.", delivery };
         });

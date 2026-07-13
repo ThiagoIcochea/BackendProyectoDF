@@ -12,6 +12,8 @@ const { canCreateClaim } = require('../utils/orderFlow');
 const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
 const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
+const { recordLog } = require('../utils/logger');
+const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require('../utils/deliveryStatusFlow');
 
 const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
 const generateTempToken = () => require('crypto').randomBytes(24).toString('hex');
@@ -130,6 +132,7 @@ router.post('/', verifyToken, async (req, res) => {
     });
 
     await claim.save({ session });
+    await recordLog({ req, usuario: req.user?.email || req.user?.name || 'usuario', descripcion: `Reclamo ${claim._id} registrado para pedido ${delivery._id}`, tipo: 'RECLAMO', metodo: req.method, ruta: req.originalUrl });
 
     const userDoc = await User.findById(req.user.id).session(session);
     await sendOrderUpdateEmail(userDoc, 'Reclamo registrado en Nendoshop', `Hemos recibido tu reclamo por ${category}.\nPronto revisaremos tu solicitud y te notificaremos.`);
@@ -168,6 +171,9 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
 
     const delivery = await Delivery.findById(claim.delivery._id).session(session);
     if (delivery) {
+      const payment = delivery.paymentId ? await Payment.findById(delivery.paymentId).session(session) : null;
+      const deliveryType = delivery.deliveryType || payment?.deliveryType || 'shipping';
+
       if (newDeliveryStatus === 'pending') {
         delivery.status = 'pending';
         syncStatusHistory(delivery, 'pending', { note: resolution || `Reclamo ${claim.status}` });
@@ -198,7 +204,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         if (!allowed.includes(newDeliveryStatus)) {
           return res.status(400).json({ message: 'Estado de entrega inválido.' });
         }
-        const isAllowedTransition = newDeliveryStatus === currentStatus || newDeliveryStatus === 'pending' || (newDeliveryStatus === 'cancelled' && ['pending','shipped','ready_for_pickup','delivered'].includes(currentStatus)) || (newDeliveryStatus === 'returned' && ['delivered'].includes(currentStatus));
+        const isAllowedTransition = newDeliveryStatus === currentStatus || newDeliveryStatus === 'pending' || (newDeliveryStatus === 'cancelled' && ['pending','shipped','ready_for_pickup','delivered'].includes(currentStatus)) || (newDeliveryStatus === 'returned' && ['delivered'].includes(currentStatus)) || isValidStatusTransition(currentStatus, newDeliveryStatus, deliveryType);
         if (!isAllowedTransition) {
           return res.status(400).json({ message: 'El reclamo solo puede mover el pedido a un estado válido y permitido por la logística.' });
         }

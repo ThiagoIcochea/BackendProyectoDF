@@ -71,9 +71,10 @@ test('canCreateClaim allows a cancellation claim when the order has been cancell
   assert.equal(result.allowed, true);
 });
 
-test('delivery status flow allows pending -> shipped -> ready_for_pickup -> delivered in order', () => {
-  assert.equal(isValidStatusTransition('pending', 'shipped'), true);
-  assert.equal(isValidStatusTransition('shipped', 'ready_for_pickup'), true);
-  assert.equal(isValidStatusTransition('ready_for_pickup', 'delivered'), true);
-  assert.equal(isValidStatusTransition('ready_for_pickup', 'shipped'), false);
+test('delivery status flow allows pending -> shipped -> delivered for shipping and pending -> ready_for_pickup -> delivered for pickup', () => {
+  assert.equal(isValidStatusTransition('pending', 'shipped', 'shipping'), true);
+  assert.equal(isValidStatusTransition('shipped', 'delivered', 'shipping'), true);
+  assert.equal(isValidStatusTransition('pending', 'ready_for_pickup', 'pickup'), true);
+  assert.equal(isValidStatusTransition('ready_for_pickup', 'delivered', 'pickup'), true);
+  assert.equal(isValidStatusTransition('ready_for_pickup', 'shipped', 'pickup'), false);
 });
