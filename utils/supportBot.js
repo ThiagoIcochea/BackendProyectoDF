@@ -35,7 +35,7 @@ const buildProductLink = (id) => {
 };
 
 const SUPPORT_INTRO =
-  "Hola, soy NendoBot, tu asesor de atención al cliente de NendoShop. Te puedo ayudar con pedidos, productos, devoluciones y cuentas. También puedo orientarte sobre un producto específico o ayudarte a encontrar el más económico.";
+  "Hola, soy NendoBot, tu asesor de atención al cliente de NendoShop. Te puedo ayudar con pedidos, productos, reclamos, devoluciones y cuentas. También puedo orientarte sobre un producto específico o ayudarte a encontrar el más económico.";
 
 const LEET_SUBSTITUTIONS = {
   "0": "o",
@@ -175,13 +175,13 @@ const extractProductHint = (text) => {
   const patterns = [
     /(?:producto|figura|art(?:í|i)culo|modelo|articulo|artículo)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i,
     /(?:quiero|busco|necesito|interesa|recomienda|ver|agrega|añade|agregar|añadir|sumar)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i,
-    /(?:de|la|el|un|una|por|para)\s+([a-záéíóúñü0-9 .,'-]{2,})/i
+    /(?:de|la|el|un|una|por|para|con)\s+([a-záéíóúñü0-9 .,'-]{2,})/i
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
-      const value = match[1].trim().replace(/\b(agregar|añadir|sumar|producto|figura|articulo|artículo|modelo|el|la|un|una|por|para|quiero|busco|necesito|interesa|recomienda|ver|de)\b/gi, "").trim();
+      const value = match[1].trim().replace(/\b(agregar|añadir|sumar|producto|figura|articulo|artículo|modelo|el|la|un|una|por|para|con|quiero|busco|necesito|interesa|recomienda|ver|de)\b/gi, "").trim();
       if (value) return value;
     }
   }
@@ -213,9 +213,7 @@ const isClaimIntent = (text) => {
   const lowered = stripAccents(normalized).toLowerCase();
   if (/\b(hola|buenos|buenas|gracias|adios|adiós|estoy bien|todo bien|como estas|como estás)\b/i.test(normalized)) return false;
   const hasClaimKeyword = /\b(reclamo|reclamar|queja|quejas|problema|problemas|incidente|fallo|fallar|falló|dañado|dañada|incompleto|incompleta|retraso|demora|demorado|cancelacion|cancelación|devolucion|devolución|reembolso|refund|error|no lleg[óo]|lleg[óo]|lleg[ao]|entreg[ao]|roto|rota|perdido|perdida)\b/i.test(lowered);
-  const hasOrderContext = /\b(pedido|orden|compra|producto|envio|envío|entrega|delivery|articulo|artículo)\b/i.test(lowered);
-  const hasAction = /\b(hacer|crear|abrir|generar|registrar|presentar|quiero|necesito|tengo|me|mi|genera|genera el|crea|crea el|haz|hace)\b/i.test(lowered);
-  return hasClaimKeyword || (hasOrderContext && hasAction) || /\b(genera|genera el|crea|crea el|haz|hace)\s+(el\s+)?(reclamo|reclamar)\b/i.test(lowered);
+  return hasClaimKeyword || /\b(genera|genera el|crea|crea el|haz|hace)\s+(el\s+)?(reclamo|reclamar)\b/i.test(lowered);
 };
 
 const inferClaimCategory = (text) => {
@@ -242,9 +240,9 @@ const inferClaimCategory = (text) => {
 const parseClaimRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized || !isClaimIntent(normalized)) return null;
-  const explicitOrderMatch = normalized.match(/\b(?:reclamo|reclamar)\b[^a-z0-9]*(?:a|para|por|del|de)\s+([a-z0-9]{2,})/i);
+  const explicitOrderMatch = normalized.match(/\b(?:reclamo|reclamar|queja|problema)\b[^a-z0-9]*(?:a|para|por|del|de|sobre|con)\s+([a-z0-9]{2,})/i);
   const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero|numero)[^0-9a-z]*(\d{2,}|[a-z0-9]{3,})/i) || explicitOrderMatch;
-  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace)\s+/gi, " ").trim();
+  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|queja|problema|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace|sobre|del|de)\s+/gi, " ").trim();
   return {
     orderNumber: orderMatch?.[1] || null,
     category: inferClaimCategory(normalized),
@@ -254,6 +252,9 @@ const parseClaimRequest = (text) => {
 
 const parseCheckoutIntent = (text) => {
   const normalized = String(text || "").trim();
+  if (isClaimIntent(normalized)) {
+    return null;
+  }
   const hasAction = /\b(crear|crea|generar|genera|generame|hacer|haz|armar|confirmar|comprar|ordenar|quiero|necesito)\b/i.test(normalized);
   const hasOrderTerm = /\b(pedido|orden|compra|comprar|comprar algo|pedido nuevo|pedido real|hacer un pedido)\b/i.test(normalized);
   const hasCheckoutCue = /\b(genera|generame|crear|crea|hacer|haz|comprar|ordenar)\b/i.test(normalized);
@@ -263,7 +264,7 @@ const parseCheckoutIntent = (text) => {
   const deliveryType = parseDeliveryPreference(normalized);
   return {
     kind: "checkout",
-    deliveryType: deliveryType || "shipping",
+    deliveryType,
     text: normalized
   };
 };
@@ -364,8 +365,8 @@ const getImmediateSupportReply = ({ text, customerName, intent }) => {
 
   if (intent === "devolucion") {
     return /pedido|producto/i.test(normalized)
-      ? `Puedo orientarte sobre devoluciones y cambios. Si me compartes el número de pedido o el producto, te digo qué pasos seguir y si aplica.`
-      : `Puedo orientarte sobre devoluciones y cambios. Si me dices el pedido o el producto, te ayudo a ver si aplica y qué hacer.`;
+      ? `Puedo orientarte sobre devoluciones, reclamos y cambios. Si me compartes el número de pedido o el producto, te digo qué pasos seguir y si aplica.`
+      : `Puedo orientarte sobre devoluciones, reclamos y cambios. Si me dices el pedido o el producto, te ayudo a ver si aplica y qué hacer.`;
   }
 
   if (intent === "cuenta") {
@@ -373,7 +374,7 @@ const getImmediateSupportReply = ({ text, customerName, intent }) => {
   }
 
   if (offTopicPattern.test(normalized) || (!scopeIntentPattern.test(normalized) && /\b(quiero|necesito|puedes|ayuda|dime|habl|como)\b/i.test(normalized))) {
-    return `Mi función es ayudarte con pedidos, productos, devoluciones y cuenta en NendoShop. Si tu consulta es de otro tema, esa no es mi finalidad.`;
+    return `Mi función es ayudarte con pedidos, productos, reclamos, devoluciones y cuenta en NendoShop. Si tu consulta es de otro tema, esa no es mi finalidad.`;
   }
 
   return null;
@@ -669,11 +670,13 @@ const handleProfileUpdateRequest = async (text, session) => {
     return "Listo, actualicé tu foto de perfil con la imagen que compartiste.";
   }
 
-  if (/^(\d{6})$/.test(normalized.trim()) && session.pendingMfaAction?.status === "waiting_for_code") {
+  if (session.pendingMfaAction?.status === "waiting_for_code") {
+    const codeMatch = normalized.match(/\b(\d{6})\b/);
+    if (!codeMatch) return null;
     const pending = session.pendingMfaAction;
     const user = await User.findById(session.userId).catch(() => null);
     if (!user) return "No puedo validar el código sin tu cuenta.";
-    const ok = await verifyActionMfa(user, pending.tempToken, normalized.trim());
+    const ok = await verifyActionMfa(user, pending.tempToken, codeMatch[1]);
     if (!ok) return "El código no es válido o ya expiró. Solicita uno nuevo para continuar.";
     if (pending.type === "phone_change") {
       user.phone = pending.newValue;
@@ -815,6 +818,145 @@ const handleCheckoutRequest = async (text, session) => {
   const checkoutIntent = parseCheckoutIntent(normalized);
   if (!checkoutIntent) return null;
 
+  const cartItems = Array.isArray(session.cartItems) ? session.cartItems : [];
+  if (!cartItems.length) {
+    session.pendingMfaAction = null;
+    return "Tu carrito está vacío. Agrega productos primero y luego te ayudo a convertirlos en una orden real.";
+  }
+
+  const currentUser = await User.findById(session.userId).catch(() => null);
+  if (!currentUser) return "No encuentro tu cuenta para iniciar el pedido.";
+
+  const pending = session.pendingMfaAction || null;
+  const shippingFee = 15;
+  const baseTotal = cartItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0);
+  const totalWithShipping = baseTotal + shippingFee;
+  const checkoutLink = `${FRONTEND_BASE_URL}/#/pagos`;
+
+  if (pending?.type === "checkout" && pending.status === "waiting_for_delivery_type") {
+    const deliveryType = parseDeliveryPreference(normalized);
+    if (!deliveryType) {
+      return "Perfecto, primero dime si deseas recojo en tienda o envío a domicilio. Si eliges envío, te aviso el costo antes de continuar.";
+    }
+
+    session.pendingMfaAction = {
+      ...pending,
+      deliveryType,
+      status: deliveryType === "shipping" ? "waiting_for_shipping_data" : "waiting_for_payment_method"
+    };
+
+    if (deliveryType === "shipping") {
+      return `Elegiste envío a domicilio. Ese envío tiene un costo de S/. ${shippingFee.toFixed(2)}. Ahora envíame la dirección, el distrito y una referencia para continuar.`;
+    }
+
+    return "Elegiste recojo en tienda. Ahora dime si pagarás con tarjeta o con PayPal.";
+  }
+
+  if (pending?.type === "checkout" && pending.status === "waiting_for_shipping_data") {
+    const addressMatch = normalized.match(/(?:direccion|dirección|calle|avenida|av\.?|jr\.?|jiron|jirón)[^:]*[:\-]?\s*(.+)/i);
+    const referenceMatch = normalized.match(/(?:referencia|ref\.?)[^:]*[:\-]?\s*(.+)/i);
+    const address = addressMatch?.[1]?.trim() || pending.address || null;
+    const reference = referenceMatch?.[1]?.trim() || pending.reference || null;
+
+    if (!address) {
+      session.pendingMfaAction = { ...pending, deliveryType: "shipping", status: "waiting_for_shipping_data" };
+      return `Aún me falta la dirección de entrega. Envíamela junto con el distrito, por favor. El envío cuesta S/. ${shippingFee.toFixed(2)}.`;
+    }
+
+    session.pendingMfaAction = {
+      ...pending,
+      deliveryType: "shipping",
+      address,
+      reference,
+      status: "waiting_for_payment_method"
+    };
+    return "Gracias. Ahora dime si pagarás con tarjeta o con PayPal.";
+  }
+
+  if (pending?.type === "checkout" && pending.status === "waiting_for_payment_method") {
+    const method = /paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null;
+    if (!method) return "Dime si pagarás con PayPal o con tarjeta.";
+
+    session.pendingMfaAction = { ...pending, paymentMethod: method, status: "waiting_for_confirmation" };
+
+    if (method === "paypal") {
+      session.pendingMfaAction = null;
+      session.cartItems = [];
+      return `Perfecto, te dejo el checkout seguro de PayPal para terminar la compra: ${checkoutLink}. Cuando finalices, la orden quedará completada automáticamente.`;
+    }
+
+    if (currentUser.paymentmethod?.numerotarjeta) {
+      const masked = String(currentUser.paymentmethod.numerotarjeta).replace(/\d(?=\d{4})/g, "•");
+      return `Tengo una tarjeta guardada que termina en ${masked.slice(-4)}. Responde confirmo para generar la orden con esa tarjeta; si prefieres otra, completa el pago seguro desde ${checkoutLink}.`;
+    }
+
+    session.pendingMfaAction = null;
+    return `Perfecto, prepararé el pedido con tarjeta. Para completar el pago, usa el checkout seguro: ${checkoutLink}.`;
+  }
+
+  if (/^(si|sí|si gracias|ok|okay|listo|confirmo|acepto)$/i.test(normalized)) {
+    if (pending?.type === "checkout" && pending.status === "waiting_for_confirmation") {
+      const paymentPayload = {
+        cliente: currentUser.name || currentUser.email,
+        documento: `BOT-${Date.now().toString().slice(-6)}`,
+        productos: cartItems.map((item) => ({ name: item.name, quantity: item.quantity, price: item.price })),
+        total: pending.deliveryType === "shipping" ? totalWithShipping : baseTotal,
+        deliveryType: pending.deliveryType || "shipping",
+        metodo_envio: pending.deliveryType === "shipping" ? "delivery" : "recojo",
+        direccion_entrega: pending.deliveryType === "shipping" ? pending.address || currentUser.address || "Pendiente" : "Recojo en tienda",
+        referencia: pending.deliveryType === "shipping" ? pending.reference || "Pendiente" : undefined,
+        envio: pending.deliveryType === "shipping" ? shippingFee : 0,
+        estado: "Pagado"
+      };
+
+      if (currentUser.paymentmethod) {
+        paymentPayload.saveCard = true;
+        paymentPayload.paymentmethod = {
+          nombretarjeta: currentUser.paymentmethod.nombretarjeta || "",
+          numerotarjeta: currentUser.paymentmethod.numerotarjeta || "",
+          cvv: currentUser.paymentmethod.cvv || "",
+          tipo: currentUser.paymentmethod.tipo || "visa"
+        };
+      }
+
+      const payment = await Payment.create(paymentPayload);
+      await Delivery.create({
+        paymentId: payment._id,
+        user: session.userId,
+        deliveryType: pending.deliveryType || "shipping",
+        status: "pending",
+        statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido creado por asistente" }],
+        destinationAddress: pending.deliveryType === "shipping" ? pending.address || currentUser.address || "Pendiente" : undefined,
+        reference: pending.deliveryType === "shipping" ? pending.reference || "Pendiente" : undefined,
+        agency: pending.deliveryType === "shipping" ? "Pendiente de registro" : undefined
+      });
+      session.pendingMfaAction = null;
+      session.cartItems = [];
+      return `Listo, generé tu pedido real. El número de pedido es ${payment.documento}.`;
+    }
+  }
+
+  const deliveryType = checkoutIntent.deliveryType || pending?.deliveryType || null;
+  if (!deliveryType) {
+    session.pendingMfaAction = { type: "checkout", status: "waiting_for_delivery_type", deliveryType: null, address: null, reference: null, agency: null };
+    return "Perfecto, voy a preparar tu pedido. Primero dime si deseas recojo en tienda o envío a domicilio.";
+  }
+
+  session.pendingMfaAction = {
+    type: "checkout",
+    status: deliveryType === "shipping" ? "waiting_for_shipping_data" : "waiting_for_payment_method",
+    deliveryType,
+    address: null,
+    reference: null,
+    agency: null
+  };
+
+  if (deliveryType === "shipping") {
+    return `Perfecto, voy a preparar tu pedido con envío a domicilio. Ese envío tiene un costo de S/. ${shippingFee.toFixed(2)}. Envíame la dirección, el distrito y una referencia para continuar.`;
+  }
+
+  return "Perfecto, voy a preparar tu pedido con recojo en tienda. Ahora dime si pagarás con tarjeta o con PayPal.";
+
   if (/^(si|sí|si gracias|ok|okay|listo|confirmo|acepto)$/i.test(normalized)) {
     if (session.pendingMfaAction?.type === "checkout" && session.pendingMfaAction.status === "waiting_for_confirmation") {
       const user = await User.findById(session.userId).catch(() => null);
@@ -850,7 +992,7 @@ const handleCheckoutRequest = async (text, session) => {
   const user = await User.findById(session.userId).catch(() => null);
   if (!user) return "No encuentro tu cuenta para iniciar el pedido.";
 
-  const pending = session.pendingMfaAction || null;
+  const legacyPending = session.pendingMfaAction || null;
   if (pending?.type === "checkout" && pending.status === "waiting_for_payment_method") {
     const method = /paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null;
     if (!method) return "Dime si pagarás con PayPal o con tarjeta.";
@@ -888,7 +1030,7 @@ const handleCheckoutRequest = async (text, session) => {
     return `Listo, generé el pedido con ${pending.deliveryType === "shipping" ? "envío a domicilio" : "recojo en tienda"}. El número de pedido es ${payment.documento}.`;
   }
 
-  const deliveryType = checkoutIntent.deliveryType;
+  const legacyDeliveryType = checkoutIntent.deliveryType;
   session.pendingMfaAction = { type: "checkout", status: "waiting_for_payment_method", deliveryType, address: null, reference: null, agency: null };
   return `Perfecto, voy a preparar tu pedido con ${deliveryType === "shipping" ? "envío a domicilio" : "recojo en tienda"}. ¿Deseas pagar con PayPal o con tarjeta?`;
 };
@@ -898,18 +1040,56 @@ const handleClaimRequest = async (text, session) => {
   const normalized = String(text || "").trim();
   const parsed = parseClaimRequest(normalized);
 
+  const pendingClaim = session.pendingClaim || null;
+  if (pendingClaim?.step === "waiting_for_order" || pendingClaim?.step === "waiting_for_details") {
+    const orderNumber = extractOrderNumber(normalized) || pendingClaim.orderNumber || null;
+    if (!orderNumber) {
+      return "Aún necesito el número de pedido para registrar el reclamo.";
+    }
+
+    const delivery = await findUserDeliveryById(session.userId, orderNumber);
+    if (!delivery) {
+      session.pendingClaim = { step: "waiting_for_order", orderNumber };
+      return `No encontré un pedido con el número ${orderNumber}. Envíame el número exacto y lo reviso de nuevo.`;
+    }
+
+    const category = CLAIM_CATEGORY_ALIASES[inferClaimCategory(normalized)] || inferClaimCategory(normalized);
+    const description = parsed?.description || normalized;
+    const existingClaims = await Claim.find({ delivery: delivery._id, status: "pending" }).lean().catch(() => []);
+    const decision = canCreateClaim({
+      category,
+      currentStatus: delivery.status,
+      deadlineDate: delivery.estimatedDate || delivery.paymentId?.fecha,
+      existingClaims
+    }, new Date());
+    if (!decision.allowed) return decision.reason;
+
+    const review = await evaluateClaimDescription(description, category);
+    if (!review.validClaim) {
+      session.pendingClaim = { step: "waiting_for_details", orderNumber };
+      return `${review.reason} Envíame una descripción más clara del problema del pedido ${orderNumber}.`;
+    }
+
+    await Claim.create({
+      delivery: delivery._id,
+      payment: delivery.paymentId?._id,
+      user: session.userId,
+      category,
+      description,
+      resolution: "pending",
+      status: "pending"
+    });
+    session.pendingClaim = null;
+    return `Listo, registré tu reclamo para el pedido ${String(delivery._id).slice(-6).toUpperCase()}. Quedó pendiente de revisión.`;
+  }
+
   if (!parsed) {
-    if (/(reclamo|reclamar)/i.test(normalized)) {
-      const explicitOrderNumber = normalized.match(/\b(?:reclamo|reclamar)\b[^a-z0-9]*(?:a|para|por|del|de)\s+([a-z0-9]{2,})/i)?.[1];
-      const orderNumber = explicitOrderNumber || extractOrderNumber(normalized) || (session.pendingClaim?.orderNumber ? session.pendingClaim.orderNumber : null);
+    if (isClaimIntent(normalized)) {
+      const explicitOrderNumber = normalized.match(/\b(?:reclamo|reclamar|queja|problema)\b[^a-z0-9]*(?:a|para|por|del|de|sobre|con)\s+([a-z0-9]{2,})/i)?.[1];
+      const orderNumber = explicitOrderNumber || extractOrderNumber(normalized) || pendingClaim?.orderNumber || null;
       if (orderNumber) {
-        const user = await User.findById(session.userId).catch(() => null);
-        if (!user) return "No encuentro tu cuenta para generar un reclamo.";
-        const delivery = await Delivery.findOne({ user: session.userId, paymentId: { $exists: true } }).populate("paymentId").lean().catch(() => null);
-        if (!delivery) return "No encontré un pedido asociado a tu cuenta para registrar el reclamo.";
-        const claim = await Claim.create({ delivery: delivery._id, payment: delivery.paymentId?._id, user: session.userId, category: "delay", description: `Reclamo generado por el asistente para ${orderNumber}`, resolution: "pending", status: "pending" });
-        session.pendingClaim = null;
-        return `Listo, registré el reclamo para el pedido ${orderNumber}. Quedó pendiente de revisión.`;
+        session.pendingClaim = { orderNumber, step: "waiting_for_details" };
+        return `Perfecto, tengo el pedido ${orderNumber}. Ahora envíame una descripción breve del problema para registrar el reclamo.`;
       }
       session.pendingClaim = { orderNumber: null, step: "waiting_for_order" };
       return "Claro. Dime el número de pedido para registrar el reclamo.";
@@ -1104,6 +1284,7 @@ const handleAutomationCommand = async (text, session) => {
   const shouldHandle = /^\/|^(ver|consultar|crear|generar|cancelar|cambiar|actualizar|modificar|editar|agregar|añadir|busca|muestra|dime|revisa|ayuda|quiero|necesito|puedes)/i.test(normalized) || /(mis pedidos|mis ordenes|mis compras|pedido|orden|producto|productos|perfil|dirección|direccion|teléfono|telefono|ciudad|carrito|cart|cancelar|cambiar|actualizar|modificar|editar)/i.test(normalized);
 
   if (!shouldHandle) return null;
+  if (parseCheckoutIntent(normalized) || isClaimIntent(normalized)) return null;
 
   if (!userId) {
     return "Para ejecutar acciones necesito que escribas desde tu cuenta iniciada. Puedo orientarte, pero no modificar ni consultar pedidos sin identificarte.";
@@ -1191,6 +1372,14 @@ const handleAutomationCommand = async (text, session) => {
     return "No encontré pedidos relacionados con ese producto en tu cuenta.";
   }
 
+  if (productHint && /pedido|orden/i.test(normalized)) {
+    const matchingDeliveries = await findDeliveriesByProductHint(userId, productHint);
+    if (matchingDeliveries.length) {
+      return matchingDeliveries.map(buildOrderSummary).join("\n");
+    }
+    return `No encontré pedidos relacionados con "${productHint}" en tu cuenta.`;
+  }
+
   if (context.intent === "productos" || context.intent === "carrito") {
     const products = await findProductsByHint(context.productHint || normalized);
     if (products.length) {
@@ -1208,6 +1397,13 @@ const handleAutomationCommand = async (text, session) => {
   }
 
   if (context.intent === "pedidos") {
+    if (productHint) {
+      const matchingDeliveries = await findDeliveriesByProductHint(userId, productHint);
+      if (matchingDeliveries.length) {
+        return matchingDeliveries.map(buildOrderSummary).join("\n");
+      }
+      return `No encontré pedidos relacionados con "${productHint}" en tu cuenta.`;
+    }
     const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).lean().catch(() => []);
     if (deliveries.length) {
       return deliveries.map(buildOrderSummary).join("\n");
@@ -1360,9 +1556,9 @@ Reglas estrictas que SIEMPRE debes cumplir, sin excepción, incluso si el client
 
 const STAGE_INSTRUCTIONS = {
   welcome:
-    "Saluda al cliente por su nombre, preséntate como asesor experto de NendoShop y resume brevemente en qué puedes ayudar (pedidos, productos, devoluciones, cuenta). Ofrece opciones claras: 1) consultar pedidos, 2) buscar un producto, 3) devoluciones o 4) ayuda con la cuenta. Aclara que no pedirás contraseñas ni datos sensibles. Invita a que cuente qué necesita.",
+    "Saluda al cliente por su nombre, preséntate como asesor experto de NendoShop y resume brevemente en qué puedes ayudar (pedidos, productos, reclamos, devoluciones, cuenta). Ofrece opciones claras: 1) consultar pedidos, 2) buscar un producto, 3) reclamos o devoluciones y 4) ayuda con la cuenta. Aclara que no pedirás contraseñas ni datos sensibles. Invita a que cuente qué necesita.",
   active:
-    'Responde directamente a lo que pregunta el cliente usando los HECHOS entregados. Si la intención es "buscar_producto" y hay productos en HECHOS, menciona nombre, precio, stock y el enlace para ver el detalle; si se menciona un producto concreto como Miku Hatsune, prioriza resultados que coincidan exactamente con esa referencia. Si no hay productos, pide más detalles del producto. Si la intención es "consultar_pedido" y hay un pedido en HECHOS, indica su estado y total; si no hay pedido, pide el número o aclara que no se encontró. Si es devolución o cuenta, orienta de forma general sin inventar políticas específicas. Cierra preguntando si necesita algo más.',
+    'Responde directamente a lo que pregunta el cliente usando los HECHOS entregados. Si la intención es "buscar_producto" y hay productos en HECHOS, menciona nombre, precio, stock y el enlace para ver el detalle; si se menciona un producto concreto como Miku Hatsune, prioriza resultados que coincidan exactamente con esa referencia. Si no hay productos, pide más detalles del producto. Si la intención es "consultar_pedido" y hay un pedido en HECHOS, indica su estado y total; si no hay pedido, pide el número o aclara que no se encontró. Si es devolución o reclamo, orienta de forma general sin inventar políticas específicas y, si falta el pedido, pide el número exacto. Cierra preguntando si necesita algo más.',
   survey_intro:
     "El cliente se está despidiendo o agradeciendo. Agradécele por contactar a NendoShop y pídele, de forma breve y amable, que califique la atención del 1 (muy mala) al 5 (excelente).",
   closing:
@@ -1394,7 +1590,7 @@ Escribe ahora el siguiente mensaje de NendoBot dirigido al cliente.`;
 
 const fallbackTemplate = ({ customerName, stage, facts }) => {
   if (stage === "welcome") {
-    return `Hola ${customerName}, soy NendoBot, asesor de NendoShop. Puedo ayudarte con pedidos, productos, devoluciones y cuenta. No pediré contraseñas ni datos sensibles. Si lo prefieres, puedes decirme 1) pedidos, 2) productos, 3) devoluciones o 4) tu cuenta.`;
+    return `Hola ${customerName}, soy NendoBot, asesor de NendoShop. Puedo ayudarte con pedidos, productos, reclamos, devoluciones y cuenta. No pediré contraseñas ni datos sensibles. Si lo prefieres, puedes decirme 1) pedidos, 2) productos, 3) reclamos o devoluciones, o 4) tu cuenta.`;
   }
   if (facts?.tipo === "producto") {
     const [p] = facts.productos || [];

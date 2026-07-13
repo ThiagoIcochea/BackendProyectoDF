@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod, extractRequestedMfaMethod, parseClaimRequest, parseCheckoutIntent } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod, extractRequestedMfaMethod, parseClaimRequest, parseCheckoutIntent, extractProductHint } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -210,10 +210,43 @@ test('parseCheckoutIntent recognizes natural checkout requests', () => {
   const parsed = parseCheckoutIntent('genera el pedido');
   assert.ok(parsed);
   assert.equal(parsed.kind, 'checkout');
+  assert.equal(parsed.deliveryType, null);
 
   const parsedNatural = parseCheckoutIntent('generame mi pedido');
   assert.ok(parsedNatural);
   assert.equal(parsedNatural.kind, 'checkout');
+});
+
+test('extractProductHint keeps product references inside pedido queries', () => {
+  const hint = extractProductHint('buscame un pedido con miku');
+  assert.match(hint, /miku/i);
+});
+
+test('buildSupportBotReply continues a pending claim instead of greeting', async () => {
+  const session = createSupportSession();
+  session.userId = 'user-123';
+  session.pendingClaim = { step: 'waiting_for_order' };
+  const reply = await buildSupportBotReply('123456', session);
+  assert.match(reply, /pedido|reclamo|encontr/i);
+  assert.doesNotMatch(reply, /NendoBot/i);
+});
+
+test('buildSupportBotReply asks for delivery type before checkout', async () => {
+  const session = createSupportSession();
+  session.userId = 'user-123';
+  session.cartItems = [{ name: 'Figura Miku', quantity: 1, price: 100 }];
+
+  const User = require('../models/User');
+  const originalFindById = User.findById;
+  User.findById = () => Promise.resolve({ name: 'Ana', email: 'ana@test.com', address: 'Av. Lima 123' });
+
+  try {
+    const reply = await buildSupportBotReply('genera el pedido', session);
+    assert.match(reply, /recojo|env[ií]o/i);
+    assert.equal(session.pendingMfaAction?.status, 'waiting_for_delivery_type');
+  } finally {
+    User.findById = originalFindById;
+  }
 });
 
 test('buildSupportBotReply asks for the order number when the user requests a claim', async () => {
