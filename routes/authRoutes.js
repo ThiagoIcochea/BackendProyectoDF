@@ -28,17 +28,14 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const MAX_IP_LOGIN_ATTEMPTS = 12;
 const LOGIN_BLOCK_DURATION_MS = 10 * 60 * 1000;
 const IP_BLOCK_DURATION_MS = 30 * 60 * 1000;
-/** 
 const isProduction = process.env.NODE_ENV === "production";
-// En localhost/desarrollo, permitir sameSite: "none" con secure: false para cross-origin
-// En producción, requerir secure: true para sameSite: "none"
 const cookieOptions = {
   httpOnly: true,
   secure: isProduction,
   sameSite: "none",
   maxAge: 7 * 24 * 60 * 60 * 1000
 };
-*/
+
 const pendingRegistrations = new Map();
 const pendingPasswordChanges = new Map();
 const pendingProfileUpdates = new Map();
@@ -457,16 +454,11 @@ router.post("/verify-2fa", async (req, res) => {
       await recordLog({ req, usuario: user.email, descripcion: "Registro completado tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
-      //cookieOptions
+      res.cookie("token", token, cookieOptions);
 
       return res.json({
         message: "Verificación correcta",
+        token,
         user: {
           id: user._id,
           name: user.name,
@@ -477,7 +469,7 @@ router.post("/verify-2fa", async (req, res) => {
       });
     }
 
-    if (pendingChangeEntry) {
+    if (pendingChangeEntry && !forgotPassword) {
       const user = await User.findOne({ email: normalizeEmail(pendingChangeEntry.email || normalizedEmail) });
       if (!user) {
         return res.status(404).json({ message: "Usuario no encontrado" });
@@ -590,16 +582,11 @@ router.post("/verify-2fa", async (req, res) => {
       await recordLog({ req, usuario: user.email, descripcion: "Contraseña actualizada tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
-      res.cookie("token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 7 * 24 * 60 * 60 * 1000
-      });
-      //cookiOptions
+      res.cookie("token", token, cookieOptions);
 
       return res.json({
         message: "Contraseña actualizada correctamente",
+        token,
         user: {
           id: user._id,
           name: user.name,
@@ -668,16 +655,11 @@ router.post("/verify-2fa", async (req, res) => {
       }
     );
 
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-    //cookieOptions
+    res.cookie("token", token, cookieOptions);
 
     return res.json({
       message: "Verificación correcta",
+      token,
       user: {
         id: user._id,
         name: user.name,
@@ -848,8 +830,6 @@ router.post("/forgot-password", async (req, res) => {
     user.twoFactorAttempts = 0;
     user.twoFactorBlockedUntil = null;
     await user.save();
-
-    await sendTwoFactorCode(user, "email", code);
 
     return res.json({
       message: "Verifica tu correo para confirmar el cambio de contraseña",
