@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -96,4 +96,11 @@ test('buildSupportBotReply executes cart requests directly without showing inter
   assert.doesNotMatch(reply, /ruta interna/i);
   assert.equal(Array.isArray(session.cartItems), true);
   assert.ok(session.cartItems.length >= 1);
+});
+
+test('buildKeyValueContext classifies product and cart requests with structured context', () => {
+  const context = buildKeyValueContext('quiero agregar un producto al carrito');
+  assert.equal(context.intent, 'carrito');
+  assert.equal(context.area, 'carrito');
+  assert.ok(context.productHint || context.intent === 'carrito');
 });

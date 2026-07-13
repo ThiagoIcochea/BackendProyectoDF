@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const https = require("https");
 const { Resend } = require("resend");
 const Payment = require("../models/Payment");
 const Product = require("../models/Product");
@@ -166,10 +167,40 @@ const extractOrderNumber = (text) => {
 };
 
 const extractProductHint = (text) => {
-  const hints = text.match(/(?:producto|figura|art(?:í|i)culo|modelo|articulo)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i);
-  if (hints && hints[1]) return hints[1].trim();
-  const fallback = text.match(/(?:quiero|busco|necesito|interesa|recomienda|ver)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i);
-  return fallback ? fallback[1].trim() : null;
+  const normalized = String(text || "").toLowerCase();
+  const patterns = [
+    /(?:producto|figura|art(?:í|i)culo|modelo|articulo|artículo)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i,
+    /(?:quiero|busco|necesito|interesa|recomienda|ver|agrega|añade|agregar|añadir|sumar)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'-]+)/i,
+    /(?:de|la|el|un|una|por|para)\s+([a-záéíóúñü0-9 .,'-]{2,})/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      const value = match[1].trim().replace(/\b(agregar|añadir|sumar|producto|figura|articulo|artículo|modelo|el|la|un|una|por|para|quiero|busco|necesito|interesa|recomienda|ver|de)\b/gi, "").trim();
+      if (value) return value;
+    }
+  }
+
+  return null;
+};
+
+const buildKeyValueContext = (text) => {
+  const lower = String(text || "").toLowerCase();
+  const context = {};
+  const productHints = ["producto", "figura", "modelo", "artículo", "articulo"].filter((hint) => lower.includes(hint));
+  const orderHints = ["pedido", "orden", "compra", "envío", "envio"].filter((hint) => lower.includes(hint));
+  const profileHints = ["perfil", "datos", "nombre", "apellido", "dirección", "direccion", "ciudad", "teléfono", "telefono"].filter((hint) => lower.includes(hint));
+  const cartHints = ["carrito", "cart"].filter((hint) => lower.includes(hint));
+  const actionHints = ["agregar", "añadir", "sumar", "agrega", "añade"].filter((hint) => lower.includes(hint));
+  if (cartHints.length || (actionHints.length && lower.includes("carrito"))) context.area = "carrito";
+  else if (productHints.length) context.area = "productos";
+  else if (orderHints.length) context.area = "pedidos";
+  else if (profileHints.length) context.area = "perfil";
+  context.intent = context.area || "general";
+  context.productHint = extractProductHint(text);
+  context.orderNumber = extractOrderNumber(text);
+  return context;
 };
 
 const parseOrderIntent = (text) => {
@@ -345,20 +376,45 @@ const generateTempToken = () => crypto.randomBytes(24).toString("hex");
 
 const sendActionMfaCode = async (user, code, method = "email") => {
   const selectedMethod = String(method || "email").toLowerCase();
-  if (selectedMethod === "console" || !resendClient) {
+
+  if (selectedMethod === "console") {
     console.log(`[MFA supportBot] Código para ${user.email}: ${code}`);
     return { sentBy: "console" };
   }
 
-  const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
-  await resendClient.emails.send({
-    from,
-    to: user.email,
-    subject: "Código de verificación - Nendoshop",
-    text: `Hola ${user.name || user.email}, tu código de verificación es ${code}. Expira en 5 minutos.`,
-    html: `<p>Hola ${user.name || user.email},</p><p>Tu código de verificación es:</p><h2>${code}</h2><p>Expira en 5 minutos.</p>`
+  if (selectedMethod === "email") {
+    if (!resendClient) {
+      console.log(`[MFA supportBot] Código para ${user.email}: ${code}`);
+      return { sentBy: "email", fallback: true };
+    }
+
+    const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
+    await resendClient.emails.send({
+      from,
+      to: user.email,
+      subject: "Código de verificación - Nendoshop",
+      text: `Hola ${user.name || user.email}, tu código de verificación es ${code}. Expira en 5 minutos.`,
+      html: `<p>Hola ${user.name || user.email},</p><p>Tu código de verificación es:</p><h2>${code}</h2><p>Expira en 5 minutos.</p>`
+    });
+    return { sentBy: "email" };
+  }
+
+  if (!user.phone) {
+    console.log(`[MFA supportBot] Sin teléfono para ${selectedMethod}; enviando por correo: ${code}`);
+    return { sentBy: "email", fallback: true };
+  }
+
+  const macroMethod = selectedMethod === "whatsapp" ? "wtsp" : selectedMethod === "call" ? "call" : selectedMethod === "sms" ? "sms" : "email";
+  const nombre = encodeURIComponent(user.name || user.email);
+  const numero = encodeURIComponent(String(user.phone));
+  const url = `https://trigger.macrodroid.com/543902b9-9627-4797-833f-8ab08ee4a3ec/otp?nombre=${nombre}&numero=${numero}&metodo=${macroMethod}&codigo=${code}`;
+
+  return new Promise((resolve) => {
+    https.get(url, (res) => {
+      res.on("data", () => {});
+      res.on("end", () => resolve({ sentBy: selectedMethod }));
+    }).on("error", () => resolve({ sentBy: selectedMethod, error: true }));
   });
-  return { sentBy: "email" };
 };
 
 const issueActionMfa = async (user, method = "email") => {
@@ -625,6 +681,29 @@ const handleAutomationCommand = async (text, session) => {
 
   const actionReply = await resolveActionRequest(normalized, session);
   if (actionReply) return actionReply;
+
+  const context = buildKeyValueContext(normalized);
+  if (context.intent === "productos" || context.intent === "carrito") {
+    const products = await Product.find().limit(8).lean().catch(() => []);
+    if (products.length) {
+      const productNames = products.map((product) => `${product.name} | precio S/. ${product.price || 0} | stock ${product.stock || 0}`).join("\n");
+      return `Tengo estos productos disponibles en la base de datos:\n${productNames}`;
+    }
+  }
+
+  if (context.intent === "pedidos") {
+    const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).limit(5).lean().catch(() => []);
+    if (deliveries.length) {
+      return deliveries.map(buildOrderSummary).join("\n");
+    }
+  }
+
+  if (context.intent === "perfil") {
+    const user = await User.findById(userId).select("-password").lean().catch(() => null);
+    if (user) {
+      return `Datos actuales:\nNombre: ${user.name || "sin registrar"}\nApellido: ${user.lastname || "sin registrar"}\nDirección: ${user.address || "sin registrar"}\nCiudad: ${user.city || "sin registrar"}\nTeléfono: ${user.phone || "sin registrar"}`;
+    }
+  }
 
   if (/contrase|password/i.test(normalized)) {
     return "Puedo guiarte con el cambio de contraseña, pero no te pediré tu contraseña actual por chat. Ve a Perfil > Seguridad, solicita el cambio y cuando el sistema pida MFA ingresa el código recibido en tu correo.";
@@ -910,6 +989,16 @@ const getSupportBotReply = async (input, session) => {
     return actionReply;
   }
 
+  const context = buildKeyValueContext(text);
+  if (context.intent !== "general") {
+    const contextualReply = await handleAutomationCommand(text, session);
+    if (contextualReply) {
+      pushHistory(session, "user", text);
+      pushHistory(session, "bot", contextualReply);
+      return contextualReply;
+    }
+  }
+
   const profileReply = await handleProfileUpdateRequest(text, session);
   if (profileReply) {
     pushHistory(session, "user", text);
@@ -1010,6 +1099,7 @@ module.exports = {
   createSupportSession,
   getSupportBotReply,
   buildSupportBotReply,
+  buildKeyValueContext,
   checkTextSafety,
   normalizeCustomerName,
   extractOrderNumber,
