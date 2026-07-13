@@ -139,7 +139,7 @@ test('filterProductsForQuery keeps only discounted items for discount requests',
   assert.ok(filteredByInstruction.every((product) => Number(product.discount || 0) > 0));
 });
 
-test('parseProfileChangeRequest understands natural language for phone and password updates', () => {
+test('parseProfileChangeRequest understands natural language for phone, password, and photo updates', () => {
   const phoneChange = parseProfileChangeRequest('quiero cambiar mi teléfono por 987654321');
   assert.equal(phoneChange.kind, 'phone');
   assert.equal(phoneChange.newValue, '987654321');
@@ -155,6 +155,17 @@ test('parseProfileChangeRequest understands natural language for phone and passw
   const passwordChange = parseProfileChangeRequest('cambia mi contraseña a MiNuevaClave123!');
   assert.equal(passwordChange.kind, 'password');
   assert.equal(passwordChange.newPassword, 'MiNuevaClave123!');
+
+  const photoChange = parseProfileChangeRequest('cambia mi foto de perfil por https://cdn.example.com/avatar.png');
+  assert.equal(photoChange.kind, 'photo');
+  assert.equal(photoChange.newValue, 'https://cdn.example.com/avatar.png');
+});
+
+test('buildSupportBotReply asks for the missing image URL when the user requests a profile photo change', async () => {
+  const session = createSupportSession();
+  session.userId = 'user-123';
+  const reply = await buildSupportBotReply('cambia mi foto de perfil', session);
+  assert.match(reply, /foto|imagen|url/i);
 });
 
 test('normalizeMfaMethod accepts common aliases', () => {

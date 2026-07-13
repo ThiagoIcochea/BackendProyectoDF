@@ -150,6 +150,8 @@ const createSupportSession = (customerName = "cliente") => ({
   history: [],
   cartItems: [],
   pendingMfaAction: null,
+  pendingClaim: null,
+  pendingProfileAction: null,
   lastBotMeta: null
 });
 
@@ -240,7 +242,8 @@ const inferClaimCategory = (text) => {
 const parseClaimRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized || !isClaimIntent(normalized)) return null;
-  const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero|numero)[^0-9a-z]*(\d{2,}|[a-z0-9]{3,})/i);
+  const explicitOrderMatch = normalized.match(/\b(?:reclamo|reclamar)\b[^a-z0-9]*(?:a|para|por|del|de)\s+([a-z0-9]{2,})/i);
+  const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero|numero)[^0-9a-z]*(\d{2,}|[a-z0-9]{3,})/i) || explicitOrderMatch;
   const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace)\s+/gi, " ").trim();
   return {
     orderNumber: orderMatch?.[1] || null,
@@ -251,9 +254,10 @@ const parseClaimRequest = (text) => {
 
 const parseCheckoutIntent = (text) => {
   const normalized = String(text || "").trim();
-  const hasAction = /\b(crear|crea|generar|genera|generame|hacer|haz|armar|confirmar|comprar|ordenar)\b/i.test(normalized);
-  const hasOrderTerm = /\b(pedido|orden|compra|comprar)\b/i.test(normalized);
-  if (!hasAction || !hasOrderTerm) {
+  const hasAction = /\b(crear|crea|generar|genera|generame|hacer|haz|armar|confirmar|comprar|ordenar|quiero|necesito)\b/i.test(normalized);
+  const hasOrderTerm = /\b(pedido|orden|compra|comprar|comprar algo|pedido nuevo|pedido real|hacer un pedido)\b/i.test(normalized);
+  const hasCheckoutCue = /\b(genera|generame|crear|crea|hacer|haz|comprar|ordenar)\b/i.test(normalized);
+  if (!hasAction || (!hasOrderTerm && !hasCheckoutCue)) {
     return null;
   }
   const deliveryType = parseDeliveryPreference(normalized);
@@ -264,11 +268,23 @@ const parseCheckoutIntent = (text) => {
   };
 };
 
+const extractProfileImageValue = (text) => {
+  const normalized = String(text || "").trim();
+  const match = normalized.match(/https?:\/\/[^\s]+/i);
+  return match ? match[0].trim() : null;
+};
+
 const parseProfileChangeRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
 
   const accentless = stripAccents(normalized).toLowerCase();
+  const photoMatch = normalized.match(/\b(foto|imagen|avatar|photo|profile)(?:\s+de\s+perfil)?\b/i);
+  if (photoMatch) {
+    const explicitUrl = extractProfileImageValue(normalized);
+    return { kind: "photo", newValue: explicitUrl };
+  }
+
   const phonePatterns = [
     /(?:tel(?:e|é)?fono|telefono|phone|celular|numero|numero|telfono|tel)[^0-9+]*([0-9+\-\s]{4,})/i,
     /(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cambiame|cambie|cambiamelo|cámbiame|cámbie)(?:\s|[^a-záéíóúñü])*?(?:tel(?:e|é)?fono|telefono|phone|celular|numero|numero|telfono|tel)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
@@ -632,9 +648,27 @@ const handleProfileUpdateRequest = async (text, session) => {
   }
 
   const user = await User.findById(session.userId).catch(() => null);
-  if (!user) return null;
+  if (!user) {
+    const parsedUpdate = parseProfileChangeRequest(normalized);
+    if (parsedUpdate?.kind === "photo") {
+      session.pendingProfileAction = { type: "photo_change", status: "waiting_for_value" };
+      return "Claro, puedo cambiar tu foto de perfil. Envíame la URL de la imagen que quieres usar.";
+    }
+    return null;
+  }
 
   const parsedUpdate = parseProfileChangeRequest(normalized);
+  if (session.pendingProfileAction?.type === "photo_change" && session.pendingProfileAction.status === "waiting_for_value") {
+    const imageValue = extractProfileImageValue(normalized);
+    if (!imageValue) {
+      return "Envíame la URL de la imagen que quieres usar para tu foto de perfil.";
+    }
+    user.profileImg = imageValue;
+    await user.save();
+    session.pendingProfileAction = null;
+    return "Listo, actualicé tu foto de perfil con la imagen que compartiste.";
+  }
+
   if (/^(\d{6})$/.test(normalized.trim()) && session.pendingMfaAction?.status === "waiting_for_code") {
     const pending = session.pendingMfaAction;
     const user = await User.findById(session.userId).catch(() => null);
@@ -669,6 +703,17 @@ const handleProfileUpdateRequest = async (text, session) => {
       session.pendingMfaAction = null;
       return "Listo, cancelé tu pedido y quedó marcado como cancelado.";
     }
+  }
+
+  if (parsedUpdate?.kind === "photo") {
+    if (parsedUpdate.newValue) {
+      user.profileImg = parsedUpdate.newValue;
+      await user.save();
+      session.pendingProfileAction = null;
+      return "Listo, actualicé tu foto de perfil.";
+    }
+    session.pendingProfileAction = { type: "photo_change", status: "waiting_for_value" };
+    return "Claro, puedo cambiar tu foto de perfil. Envíame la URL de la imagen que quieres usar.";
   }
 
   if (parsedUpdate?.kind === "password") {
@@ -855,7 +900,8 @@ const handleClaimRequest = async (text, session) => {
 
   if (!parsed) {
     if (/(reclamo|reclamar)/i.test(normalized)) {
-      const orderNumber = extractOrderNumber(normalized) || (session.pendingClaim?.orderNumber ? session.pendingClaim.orderNumber : null);
+      const explicitOrderNumber = normalized.match(/\b(?:reclamo|reclamar)\b[^a-z0-9]*(?:a|para|por|del|de)\s+([a-z0-9]{2,})/i)?.[1];
+      const orderNumber = explicitOrderNumber || extractOrderNumber(normalized) || (session.pendingClaim?.orderNumber ? session.pendingClaim.orderNumber : null);
       if (orderNumber) {
         const user = await User.findById(session.userId).catch(() => null);
         if (!user) return "No encuentro tu cuenta para generar un reclamo.";
@@ -1083,7 +1129,7 @@ const handleAutomationCommand = async (text, session) => {
     }).join("\n");
   }
 
-  if (/(perfil|mis datos|datos|nombre|apellido|dirección|direccion|ciudad|teléfono|telefono)/i.test(normalized)) {
+  if (/(perfil|mis datos|datos|nombre|apellido|dirección|direccion|ciudad|teléfono|telefono)/i.test(normalized) && !/(cambiar|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna)/i.test(normalized)) {
     const user = await User.findById(userId).select("-password").lean().catch(() => null);
     if (!user) return "No puedo ver tu perfil sin que estés autenticado.";
     const details = [
@@ -1488,6 +1534,19 @@ const getSupportBotReply = async (input, session) => {
     return actionReply;
   }
 
+  const profileReply = await handleProfileUpdateRequest(text, session);
+  if (profileReply) {
+    const lastUserText = session.history?.slice(-1)[0]?.text;
+    const lastBotReply = session.history?.slice(-1)[0]?.text;
+    const isRepetitive = lastUserText === text && lastBotReply === profileReply;
+    const finalReply = isRepetitive
+      ? `${profileReply} Si quieres, puedo ayudarte con algo más concreto como pedidos, productos o devoluciones.`
+      : profileReply;
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", finalReply);
+    return finalReply;
+  }
+
   const context = buildKeyValueContext(text);
   if (context.intent !== "general") {
     const contextualReply = await handleAutomationCommand(text, session);
@@ -1510,19 +1569,6 @@ const getSupportBotReply = async (input, session) => {
     pushHistory(session, "user", text);
     pushHistory(session, "bot", claimReply);
     return claimReply;
-  }
-
-  const profileReply = await handleProfileUpdateRequest(text, session);
-  if (profileReply) {
-    const lastUserText = session.history?.slice(-1)[0]?.text;
-    const lastBotReply = session.history?.slice(-1)[0]?.text;
-    const isRepetitive = lastUserText === text && lastBotReply === profileReply;
-    const finalReply = isRepetitive
-      ? `${profileReply} Si quieres, puedo ayudarte con algo más concreto como pedidos, productos o devoluciones.`
-      : profileReply;
-    pushHistory(session, "user", text);
-    pushHistory(session, "bot", finalReply);
-    return finalReply;
   }
 
   const cancelReply = await handleCancelOrderRequest(text, session);
