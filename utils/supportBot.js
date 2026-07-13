@@ -198,6 +198,13 @@ const normalizeMfaMethod = (value) => {
   return raw;
 };
 
+const extractRequestedMfaMethod = (text) => {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return "email";
+  const explicitMethod = normalized.match(/\b(correo|email|mail|sms|mensaje|texto|whatsapp|wa|wsp|wasap|llamada|call|llamar|consola|console)\b/i);
+  return normalizeMfaMethod(explicitMethod ? explicitMethod[1] : "email");
+};
+
 const parseProfileChangeRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
@@ -581,9 +588,11 @@ const handleProfileUpdateRequest = async (text, session) => {
     if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(newPassword)) {
       return "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo.";
     }
-    const tempToken = await issueActionMfa(user, "email");
-    session.pendingMfaAction = { type: "password_change", status: "waiting_for_code", tempToken, newPassword };
-    return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de contraseña.";
+    const requestedMethod = extractRequestedMfaMethod(normalized);
+    const tempToken = await issueActionMfa(user, requestedMethod);
+    session.pendingMfaAction = { type: "password_change", status: "waiting_for_code", tempToken, newPassword, method: requestedMethod };
+    const methodLabel = requestedMethod === "email" ? "correo" : requestedMethod === "console" ? "consola" : requestedMethod === "call" ? "llamada" : requestedMethod === "whatsapp" ? "WhatsApp" : "SMS";
+    return `Te envié un código de verificación por ${methodLabel}. Envíame los 6 dígitos para confirmar el cambio de contraseña.`;
   }
 
   if (/contrase(?:ñ|n)a|password/i.test(normalized)) {
@@ -612,10 +621,12 @@ const handleProfileUpdateRequest = async (text, session) => {
     }
 
     try {
-      const mfaResult = await issueActionMfa(user, "email");
-      session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken: mfaResult.tempToken, newValue: parsedUpdate.newValue };
+      const requestedMethod = extractRequestedMfaMethod(normalized);
+      const mfaResult = await issueActionMfa(user, requestedMethod);
+      session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken: mfaResult.tempToken, newValue: parsedUpdate.newValue, method: requestedMethod };
       const fallbackText = mfaResult.fallback ? ` El código para pruebas es ${mfaResult.code}.` : "";
-      return `Te envié un código de verificación${mfaResult.fallback ? " (se registró en consola porque el correo falló)" : " por correo"}. Envíame los 6 dígitos para confirmar el cambio de teléfono.${fallbackText}`;
+      const methodLabel = requestedMethod === "email" ? "correo" : requestedMethod === "console" ? "consola" : requestedMethod === "call" ? "llamada" : requestedMethod === "whatsapp" ? "WhatsApp" : "SMS";
+      return `Te envié un código de verificación por ${methodLabel}${mfaResult.fallback ? " (se registró en consola porque el canal falló)" : ""}. Envíame los 6 dígitos para confirmar el cambio de teléfono.${fallbackText}`;
     } catch (error) {
       return `No pude enviarte el código en este momento: ${error.message}`;
     }
@@ -1305,5 +1316,6 @@ module.exports = {
   analyzeMessageWithGroq,
   rankProductMatches,
   parseProfileChangeRequest,
-  normalizeMfaMethod
+  normalizeMfaMethod,
+  extractRequestedMfaMethod
 };

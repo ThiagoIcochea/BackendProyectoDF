@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod, extractRequestedMfaMethod } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -155,4 +155,10 @@ test('normalizeMfaMethod accepts common aliases', () => {
   assert.equal(normalizeMfaMethod('correo'), 'email');
   assert.equal(normalizeMfaMethod('whatsapp'), 'whatsapp');
   assert.equal(normalizeMfaMethod('llamada'), 'call');
+});
+
+test('extractRequestedMfaMethod ignores casing and picks the requested channel', () => {
+  assert.equal(extractRequestedMfaMethod('hola cambia mi celular a 968085026 por SMS'), 'sms');
+  assert.equal(extractRequestedMfaMethod('cambia mi contraseña por WhatsApp'), 'whatsapp');
+  assert.equal(extractRequestedMfaMethod('envíame el código por LlAmAdA'), 'call');
 });
