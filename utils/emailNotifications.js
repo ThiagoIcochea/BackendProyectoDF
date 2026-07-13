@@ -4,7 +4,9 @@ const resendApiKey = process.env.RESEND_API_KEY;
 const resendClient = resendApiKey ? new Resend(resendApiKey) : null;
 
 const getFromAddress = () => {
-  return (process.env.RESEND_FROM_EMAIL || 'Nendoshop <notificaciones@freecodingvibes.shop>').trim();
+  const raw = (process.env.RESEND_FROM_EMAIL || '').trim();
+  if (raw && raw.includes('@')) return raw;
+  return 'onboarding@resend.dev';
 };
 
 const sendOrderUpdateEmail = async (user, subject, message) => {
@@ -35,4 +37,4 @@ const sendOrderUpdateEmail = async (user, subject, message) => {
   }
 };
 
-module.exports = { sendOrderUpdateEmail };
+module.exports = { getFromAddress, sendOrderUpdateEmail };

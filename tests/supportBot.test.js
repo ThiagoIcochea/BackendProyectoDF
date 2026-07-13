@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, parseProfileChangeRequest, normalizeMfaMethod } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, filterProductsForQuery, parseProfileChangeRequest, normalizeMfaMethod } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -115,6 +115,18 @@ test('rankProductMatches prioritizes exact product names over unrelated products
   assert.ok(ranked.length >= 1);
   assert.equal(ranked[0].name, 'Miku Hatsune Figure');
   assert.ok(ranked[0].score > 0);
+});
+
+test('filterProductsForQuery keeps only discounted items for discount requests', () => {
+  const products = [
+    { name: 'Figura Naruto', discount: 0.2 },
+    { name: 'Figura Miku', discount: 0 },
+    { name: 'Figura Goku', discount: 0.15 }
+  ];
+
+  const filtered = filterProductsForQuery('productos en descuento', products);
+  assert.equal(filtered.length, 2);
+  assert.ok(filtered.every((product) => Number(product.discount || 0) > 0));
 });
 
 test('parseProfileChangeRequest understands natural language for phone and password updates', () => {

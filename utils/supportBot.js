@@ -288,9 +288,19 @@ const getImmediateSupportReply = ({ text, customerName, intent }) => {
 
 const isCheapestRequest = (text) => /(?:producto|art[ií]culo|figura).{0,20}(m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text) || /(?:m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text);
 
+const isDiscountQuery = (text) => /(?:descuento|descuentos|oferta|ofertas|promocion|promoción|promo|rebaja|rebajado|en descuento|con descuento)/i.test(String(text || ""));
+
+const normalizeSearchTokens = (text) => {
+  const normalized = String(text || "").trim().toLowerCase();
+  return normalized
+    .split(/[\s/,-]+/)
+    .filter(Boolean)
+    .filter((token) => !["producto", "productos", "figura", "figuras", "modelo", "modelos", "articulo", "artículo", "descuento", "descuentos", "oferta", "ofertas", "promo", "promocion", "promoción", "rebaja", "rebajado", "con", "en", "por", "para", "quiero", "necesito", "busco", "muestra", "dime", "ver", "lista", "mejores", "barato", "caro", "de", "del", "la", "el", "un", "una"].includes(token));
+};
+
 const rankProductMatches = (hint, products = []) => {
   const normalizedHint = String(hint || "").trim().toLowerCase();
-  const tokens = normalizedHint.split(/\s+/).filter(Boolean);
+  const tokens = normalizeSearchTokens(normalizedHint);
   if (!tokens.length || !products.length) return [];
 
   const scoreProduct = (product) => {
@@ -320,15 +330,29 @@ const rankProductMatches = (hint, products = []) => {
     .map((item) => ({ ...item.product, score: item.score }));
 };
 
+const filterProductsForQuery = (hint, products = []) => {
+  const normalizedHint = String(hint || "").trim();
+  const wantsDiscounts = isDiscountQuery(normalizedHint);
+  const baseProducts = Array.isArray(products) ? products : [];
+  const filtered = wantsDiscounts
+    ? baseProducts.filter((product) => Number(product.discount || 0) > 0)
+    : baseProducts;
+
+  if (!normalizedHint) return filtered.slice(0, 5);
+  const searchTokens = normalizeSearchTokens(normalizedHint);
+  if (!searchTokens.length) return filtered.slice(0, 5);
+  const ranked = rankProductMatches(normalizedHint, filtered);
+  return ranked.slice(0, 5);
+};
+
 const findProductsByHint = async (hint) => {
   if (!hint) return [];
-  const words = String(hint || "").trim().split(/\s+/).filter(Boolean);
+  const words = normalizeSearchTokens(hint);
   if (!words.length) return [];
 
   try {
     const products = await Product.find({}).lean();
-    const ranked = rankProductMatches(hint, products);
-    return ranked.slice(0, 5);
+    return filterProductsForQuery(hint, products);
   } catch (err) {
     return [];
   }
@@ -449,7 +473,7 @@ const sendActionMfaCode = async (user, code, method = "email") => {
       return { sentBy: "email", fallback: true };
     }
 
-    const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
+    const from = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
     await resendClient.emails.send({
       from,
       to: user.email,
@@ -802,10 +826,10 @@ const handleAutomationCommand = async (text, session) => {
 
   const context = buildKeyValueContext(normalized);
   if (context.intent === "productos" || context.intent === "carrito") {
-    const products = await Product.find().limit(8).lean().catch(() => []);
+    const products = await findProductsByHint(context.productHint || normalized);
     if (products.length) {
-      const productNames = products.map((product) => `${product.name} | precio S/. ${product.price || 0} | stock ${product.stock || 0}`).join("\n");
-      return `Tengo estos productos disponibles en la base de datos:\n${productNames}`;
+      const productNames = products.map((product) => `${product.name} | precio S/. ${product.price || 0} | stock ${product.stock || 0}${Number(product.discount || 0) > 0 ? ` | descuento ${Math.round(Number(product.discount || 0) * 100)}%` : ""}`).join("\n");
+      return `Tengo estos productos que coinciden con tu consulta:\n${productNames}`;
     }
   }
 
@@ -1239,6 +1263,7 @@ module.exports = {
   extractOrderNumber,
   extractProductHint,
   findProductsByHint,
+  filterProductsForQuery,
   parseOrderIntent,
   parseDeliveryPreference,
   moderateCommunityMessage,

@@ -30,7 +30,7 @@ const sendActionMfaCode = async (user, code, method = "email") => {
         return { sentBy: "console" };
     }
 
-    const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
+    const from = (process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev").trim();
     await resendClient.emails.send({
         from,
         to: user.email,
