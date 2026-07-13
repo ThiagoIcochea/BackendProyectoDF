@@ -127,6 +127,10 @@ test('filterProductsForQuery keeps only discounted items for discount requests',
   const filtered = filterProductsForQuery('productos en descuento', products);
   assert.equal(filtered.length, 2);
   assert.ok(filtered.every((product) => Number(product.discount || 0) > 0));
+
+  const filteredByInstruction = filterProductsForQuery('filtra productos con descuento', products);
+  assert.equal(filteredByInstruction.length, 2);
+  assert.ok(filteredByInstruction.every((product) => Number(product.discount || 0) > 0));
 });
 
 test('parseProfileChangeRequest understands natural language for phone and password updates', () => {
@@ -137,6 +141,10 @@ test('parseProfileChangeRequest understands natural language for phone and passw
   const numberChange = parseProfileChangeRequest('cámbiame el número a 987654321');
   assert.equal(numberChange.kind, 'phone');
   assert.equal(numberChange.newValue, '987654321');
+
+  const altPhoneChange = parseProfileChangeRequest('cambia mi telfono por 912345678');
+  assert.equal(altPhoneChange.kind, 'phone');
+  assert.equal(altPhoneChange.newValue, '912345678');
 
   const passwordChange = parseProfileChangeRequest('cambia mi contraseña a MiNuevaClave123!');
   assert.equal(passwordChange.kind, 'password');

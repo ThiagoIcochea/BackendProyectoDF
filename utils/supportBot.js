@@ -12,6 +12,7 @@ const { canCreateClaim } = require("./orderFlow");
 const { evaluateClaimDescription } = require("./claimReview");
 const { syncStatusHistory } = require("./deliveryStatusHistory");
 const { recordLog } = require("./logger");
+const { issueActionMfa: issueSharedActionMfa, verifyActionMfa: verifySharedActionMfa } = require("./twoFactor");
 
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || process.env.REACT_APP_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://nendoshop.onrender.com");
 const PRODUCT_DETAIL_PATH = "/product";
@@ -190,8 +191,9 @@ const normalizeMfaMethod = (value) => {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "email";
   if (["correo", "email", "mail"].includes(raw)) return "email";
-  if (["sms", "mensaje", "texto", "whatsapp", "wa"].includes(raw)) return "whatsapp";
-  if (["llamada", "call", "telefono"].includes(raw)) return "call";
+  if (["sms", "mensaje", "texto"].includes(raw)) return "sms";
+  if (["whatsapp", "wa"].includes(raw)) return "whatsapp";
+  if (["llamada", "call", "telefono", "telfono", "tel"].includes(raw)) return "call";
   if (["console", "consola"].includes(raw)) return "console";
   return raw;
 };
@@ -200,14 +202,15 @@ const parseProfileChangeRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
 
+  const accentless = stripAccents(normalized).toLowerCase();
   const phonePatterns = [
-    /(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)[^0-9+]*([0-9+\-\s]{4,})/i,
-    /(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cámbiame|cambie|cambiamelo)(?:\s|[^a-záéíóúñü])*?(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
-    /(?:tel(?:é|e)fono|telefono|phone|celular|n(?:ú|u)mero)(?:\s|[^a-záéíóúñü])*?(?:a|al|nuevo|nueva|por|:)?(?:\s*)([0-9+\-\s]{4,})/i
+    /(?:tel(?:e|é)?fono|telefono|phone|celular|numero|numero|telfono|tel)[^0-9+]*([0-9+\-\s]{4,})/i,
+    /(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cambiame|cambie|cambiamelo|cámbiame|cámbie)(?:\s|[^a-záéíóúñü])*?(?:tel(?:e|é)?fono|telefono|phone|celular|numero|numero|telfono|tel)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
+    /(?:tel(?:e|é)?fono|telefono|phone|celular|numero|numero|telfono|tel)(?:\s|[^a-záéíóúñü])*?(?:a|al|nuevo|nueva|por|:)?(?:\s*)([0-9+\-\s]{4,})/i
   ];
 
   for (const pattern of phonePatterns) {
-    const phoneMatch = normalized.match(pattern);
+    const phoneMatch = normalized.match(pattern) || accentless.match(new RegExp(pattern.source, pattern.flags));
     if (phoneMatch?.[1]) {
       return { kind: "phone", newValue: phoneMatch[1].trim() };
     }
@@ -296,14 +299,14 @@ const getImmediateSupportReply = ({ text, customerName, intent }) => {
 
 const isCheapestRequest = (text) => /(?:producto|art[ií]culo|figura).{0,20}(m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text) || /(?:m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text);
 
-const isDiscountQuery = (text) => /(?:descuento|descuentos|oferta|ofertas|promocion|promoción|promo|rebaja|rebajado|en descuento|con descuento)/i.test(String(text || ""));
+const isDiscountQuery = (text) => /(?:descuento|descuentos|oferta|ofertas|promocion|promoción|promo|rebaja|rebajado|en descuento|con descuento|filtra|filtrar|solo|mostrar|muestra|con descuento)/i.test(String(text || ""));
 
 const normalizeSearchTokens = (text) => {
   const normalized = String(text || "").trim().toLowerCase();
   return normalized
     .split(/[\s/,-]+/)
     .filter(Boolean)
-    .filter((token) => !["producto", "productos", "figura", "figuras", "modelo", "modelos", "articulo", "artículo", "descuento", "descuentos", "oferta", "ofertas", "promo", "promocion", "promoción", "rebaja", "rebajado", "con", "en", "por", "para", "quiero", "necesito", "busco", "muestra", "dime", "ver", "lista", "mejores", "barato", "caro", "de", "del", "la", "el", "un", "una"].includes(token));
+    .filter((token) => !["producto", "productos", "figura", "figuras", "modelo", "modelos", "articulo", "artículo", "descuento", "descuentos", "oferta", "ofertas", "promo", "promocion", "promoción", "rebaja", "rebajado", "con", "en", "por", "para", "quiero", "necesito", "busco", "muestra", "dime", "ver", "lista", "mejores", "barato", "caro", "de", "del", "la", "el", "un", "una", "filtra", "filtrar", "solo", "mostrar"].includes(token));
 };
 
 const rankProductMatches = (hint, products = []) => {
@@ -522,43 +525,21 @@ const sendActionMfaCode = async (user, code, method = "email") => {
 };
 
 const issueActionMfa = async (user, method = "email") => {
-  const code = generateCode();
-  const tempToken = generateTempToken();
-  const now = new Date();
-  const selectedMethod = String(method || "email").toLowerCase();
-  await sendActionMfaCode(user, code, selectedMethod);
+  const selectedMethod = normalizeMfaMethod(method);
+  const result = await issueSharedActionMfa(user, selectedMethod, {
+    subject: "Código de verificación - Nendoshop",
+    title: "Verificación de seguridad",
+    description: "Tu código de verificación para el asistente es:"
+  });
 
-  user.twoFactorCode = code;
-  user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
-  user.twoFactorTempToken = tempToken;
-  user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
-  user.twoFactorLastSentAt = now;
-  user.twoFactorAttempts = 0;
-  user.twoFactorBlockedUntil = null;
-  await user.save();
-  return tempToken;
+  if (result?.error) {
+    throw new Error(result.message || "No se pudo enviar el código de verificación.");
+  }
+
+  return result.tempToken;
 };
 
-const verifyActionMfa = async (user, tempToken, code) => {
-  const now = new Date();
-  const valid = user.twoFactorTempToken === tempToken &&
-    Boolean(user.twoFactorCode) &&
-    user.twoFactorCode === String(code || "").trim() &&
-    user.twoFactorExpires &&
-    user.twoFactorExpires >= now;
-
-  if (!valid) return false;
-
-  user.twoFactorCode = null;
-  user.twoFactorExpires = null;
-  user.twoFactorTempToken = null;
-  user.twoFactorAttempts = 0;
-  user.twoFactorBlockedUntil = null;
-  user.twoFactorLastSentAt = null;
-  user.twoFactorMethod = null;
-  await user.save();
-  return true;
-};
+const verifyActionMfa = async (user, tempToken, code) => verifySharedActionMfa(user, tempToken, code);
 
 const handleProfileUpdateRequest = async (text, session) => {
   if (!session?.userId) return null;
@@ -622,9 +603,17 @@ const handleProfileUpdateRequest = async (text, session) => {
       return "Listo, actualicé tu teléfono y quedó verificado con MFA.";
     }
 
-    const tempToken = await issueActionMfa(user, "email");
-    session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken, newValue: parsedUpdate.newValue };
-    return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de teléfono.";
+    if (!parsedUpdate.newValue) {
+      return "Claro, dime el nuevo teléfono para continuar con la actualización.";
+    }
+
+    try {
+      const tempToken = await issueActionMfa(user, "email");
+      session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken, newValue: parsedUpdate.newValue };
+      return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de teléfono.";
+    } catch (error) {
+      return `No pude enviarte el código en este momento: ${error.message}`;
+    }
   }
 
   const fieldMap = [

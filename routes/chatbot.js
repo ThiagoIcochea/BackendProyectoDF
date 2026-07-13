@@ -1,11 +1,12 @@
 const express = require("express");
 const router = express.Router();
 
+const verifyToken = require("../middlewares/verifyToken");
 const { createSupportSession, getSupportBotReply, normalizeCustomerName } = require("../utils/supportBot");
 
 const sessions = new Map();
 
-router.post("/message", async (req, res) => {
+router.post("/message", verifyToken, async (req, res) => {
   try {
     const { sessionId, message, customerName } = req.body;
 
@@ -15,8 +16,12 @@ router.post("/message", async (req, res) => {
 
     let session = sessions.get(sessionId);
     if (!session) {
-      session = createSupportSession(normalizeCustomerName(customerName));
+      session = createSupportSession(normalizeCustomerName(customerName || req.user?.name || "cliente"));
       sessions.set(sessionId, session);
+    }
+
+    if (req.user?.id || req.user?._id) {
+      session.userId = String(req.user.id || req.user._id);
     }
 
     const reply = await getSupportBotReply(message, session);
