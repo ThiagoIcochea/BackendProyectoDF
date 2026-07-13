@@ -179,6 +179,15 @@ const handleClientMessage = async (socket, message) => {
     if (roomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
       session.userId = userId || socket.userId || session.userId || null;
+      if (Array.isArray(message.cartItems)) {
+        session.cartItems = message.cartItems.map((item) => ({
+          id: item.id || item._id || item.name,
+          name: item.name || "Producto",
+          price: Number(item.price || 0),
+          quantity: Number(item.quantity || 1),
+          image: item.image || ""
+        }));
+      }
       socket.supportSession = session;
       
       const replyText = await buildSupportBotReply(normalizedText, session);

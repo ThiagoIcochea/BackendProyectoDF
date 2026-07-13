@@ -262,9 +262,11 @@ const parseCheckoutIntent = (text) => {
     return null;
   }
   const deliveryType = parseDeliveryPreference(normalized);
+  const paymentMethod = /paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null;
   return {
     kind: "checkout",
     deliveryType,
+    paymentMethod,
     text: normalized
   };
 };
@@ -831,7 +833,20 @@ const handleCheckoutRequest = async (text, session) => {
   const shippingFee = 15;
   const baseTotal = cartItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0);
   const totalWithShipping = baseTotal + shippingFee;
-  const checkoutLink = `${FRONTEND_BASE_URL}/#/pagos`;
+  const requestedDeliveryType = checkoutIntent.deliveryType || parseDeliveryPreference(normalized);
+  const requestedMethod = checkoutIntent.paymentMethod || null;
+
+  if (requestedDeliveryType && requestedMethod && !pending) {
+    session.pendingMfaAction = {
+      type: "checkout",
+      status: requestedMethod === "card" && currentUser.paymentmethod ? "waiting_for_confirmation" : "waiting_for_payment_method",
+      deliveryType: requestedDeliveryType,
+      address: null,
+      reference: null,
+      agency: null,
+      paymentMethod: requestedMethod
+    };
+  }
 
   if (pending?.type === "checkout" && pending.status === "waiting_for_delivery_type") {
     const deliveryType = parseDeliveryPreference(normalized);
@@ -873,25 +888,47 @@ const handleCheckoutRequest = async (text, session) => {
     return "Gracias. Ahora dime si pagarás con tarjeta o con PayPal.";
   }
 
-  if (pending?.type === "checkout" && pending.status === "waiting_for_payment_method") {
-    const method = /paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null;
+  if ((pending?.type === "checkout" && pending.status === "waiting_for_payment_method") || (requestedDeliveryType && requestedMethod && !pending)) {
+    const method = requestedMethod || (/paypal|paypay|paypal/i.test(normalized) ? "paypal" : /tarjeta|card|credito|debito|visa|mastercard/i.test(normalized) ? "card" : null);
     if (!method) return "Dime si pagarás con PayPal o con tarjeta.";
 
-    session.pendingMfaAction = { ...pending, paymentMethod: method, status: "waiting_for_confirmation" };
+    const checkoutState = pending?.type === "checkout" ? pending : session.pendingMfaAction || {
+      type: "checkout",
+      deliveryType: requestedDeliveryType || "shipping",
+      address: null,
+      reference: null,
+      agency: null
+    };
+    session.pendingMfaAction = { ...checkoutState, paymentMethod: method, status: "waiting_for_confirmation" };
 
     if (method === "paypal") {
-      session.pendingMfaAction = null;
-      session.cartItems = [];
-      return `Perfecto, te dejo el checkout seguro de PayPal para terminar la compra: ${checkoutLink}. Cuando finalices, la orden quedará completada automáticamente.`;
+      setSessionMeta(session, {
+        type: "navigate",
+        path: "/pagos",
+        paymentMethod: "paypal",
+        deliveryType: session.pendingMfaAction.deliveryType || requestedDeliveryType || "shipping"
+      });
+      return "Perfecto, te llevo al pago seguro de PayPal para terminar la compra. Cuando finalices, la orden quedará completada automáticamente.";
     }
 
     if (currentUser.paymentmethod?.numerotarjeta) {
       const masked = String(currentUser.paymentmethod.numerotarjeta).replace(/\d(?=\d{4})/g, "•");
-      return `Tengo una tarjeta guardada que termina en ${masked.slice(-4)}. Responde confirmo para generar la orden con esa tarjeta; si prefieres otra, completa el pago seguro desde ${checkoutLink}.`;
+      setSessionMeta(session, {
+        type: "navigate",
+        path: "/pagos",
+        paymentMethod: "card",
+        deliveryType: session.pendingMfaAction.deliveryType || requestedDeliveryType || "shipping"
+      });
+      return `Tengo una tarjeta guardada que termina en ${masked.slice(-4)}. Te llevo al pago seguro para continuar con esa misma tarjeta.`;
     }
 
-    session.pendingMfaAction = null;
-    return `Perfecto, prepararé el pedido con tarjeta. Para completar el pago, usa el checkout seguro: ${checkoutLink}.`;
+    setSessionMeta(session, {
+      type: "navigate",
+      path: "/pagos",
+      paymentMethod: "card",
+      deliveryType: session.pendingMfaAction.deliveryType || requestedDeliveryType || "shipping"
+    });
+    return "Perfecto, te llevo al pago seguro para que completes la tarjeta con los datos necesarios.";
   }
 
   if (/^(si|sí|si gracias|ok|okay|listo|confirmo|acepto)$/i.test(normalized)) {
@@ -936,7 +973,7 @@ const handleCheckoutRequest = async (text, session) => {
     }
   }
 
-  const deliveryType = checkoutIntent.deliveryType || pending?.deliveryType || null;
+  const deliveryType = requestedDeliveryType || pending?.deliveryType || null;
   if (!deliveryType) {
     session.pendingMfaAction = { type: "checkout", status: "waiting_for_delivery_type", deliveryType: null, address: null, reference: null, agency: null };
     return "Perfecto, voy a preparar tu pedido. Primero dime si deseas recojo en tienda o envío a domicilio.";

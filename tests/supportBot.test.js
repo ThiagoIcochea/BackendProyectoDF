@@ -211,6 +211,7 @@ test('parseCheckoutIntent recognizes natural checkout requests', () => {
   assert.ok(parsed);
   assert.equal(parsed.kind, 'checkout');
   assert.equal(parsed.deliveryType, null);
+  assert.equal(parsed.paymentMethod, null);
 
   const parsedNatural = parseCheckoutIntent('generame mi pedido');
   assert.ok(parsedNatural);
@@ -249,6 +250,26 @@ test('buildSupportBotReply asks for delivery type before checkout', async () => 
   }
 });
 
+test('buildSupportBotReply handles combined pickup and PayPal checkout without showing a raw link', async () => {
+  const session = createSupportSession();
+  session.userId = 'user-123';
+  session.cartItems = [{ name: 'Figura Miku', quantity: 1, price: 100 }];
+
+  const User = require('../models/User');
+  const originalFindById = User.findById;
+  User.findById = () => Promise.resolve({ name: 'Ana', email: 'ana@test.com', address: 'Av. Lima 123' });
+
+  try {
+    const reply = await buildSupportBotReply('genera el pedido por recojo en tienda con paypal', session);
+    assert.match(reply, /paypal|pago seguro/i);
+    assert.doesNotMatch(reply, /https?:\/\//i);
+    assert.equal(session.lastBotMeta?.type, 'navigate');
+    assert.equal(session.lastBotMeta?.path, '/pagos');
+  } finally {
+    User.findById = originalFindById;
+  }
+});
+
 test('buildSupportBotReply asks for the order number when the user requests a claim', async () => {
   const session = createSupportSession();
   session.userId = 'user-123';
@@ -260,4 +281,11 @@ test('parseCheckoutIntent detects a checkout request and delivery preference', (
   const parsed = parseCheckoutIntent('crea un pedido con envío a casa');
   assert.equal(parsed.kind, 'checkout');
   assert.equal(parsed.deliveryType, 'shipping');
+});
+
+test('parseCheckoutIntent detects combined delivery and payment intent', () => {
+  const parsed = parseCheckoutIntent('genera el pedido por recojo en tienda con paypal');
+  assert.equal(parsed.kind, 'checkout');
+  assert.equal(parsed.deliveryType, 'pickup');
+  assert.equal(parsed.paymentMethod, 'paypal');
 });
