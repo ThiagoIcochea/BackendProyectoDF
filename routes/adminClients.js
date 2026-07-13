@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const router = express.Router();
 
 const User = require("../models/User");
+const LoginIpBlock = require("../models/LoginIpBlock");
 const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
 const { recordLog } = require("../utils/logger");
@@ -118,6 +119,12 @@ router.patch("/:id/block", verifyToken, isAdmin, async (req, res) => {
     user.chatBlockedUntil = blocked ? new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) : null;
     user.chatBlockReason = blocked ? reason || "Reporte acumulado" : "";
     user.chatReportCount = blocked ? Math.max(user.chatReportCount || 0, 10) : Math.max(0, (user.chatReportCount || 0) - 1);
+    if (!blocked) {
+      user.loginFailedAttempts = 0;
+      user.loginBlockedUntil = null;
+      user.twoFactorAttempts = 0;
+      user.twoFactorBlockedUntil = null;
+    }
     await user.save();
 
     await recordLog({ req, usuario: req.user?.email || "admin", descripcion: blocked ? `Bloqueó al usuario ${user.email}` : `Desbloqueó al usuario ${user.email}`, tipo: "SISTEMA", metodo: req.method, ruta: req.originalUrl });
@@ -126,6 +133,32 @@ router.patch("/:id/block", verifyToken, isAdmin, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error al actualizar el estado del usuario" });
+  }
+});
+
+router.get("/security/ip-blocks", verifyToken, isAdmin, async (req, res) => {
+  try {
+    const blocks = await LoginIpBlock.find().sort({ updatedAt: -1 }).lean();
+    res.json(blocks);
+  } catch (error) {
+    res.status(500).json({ message: "Error al cargar IPs bloqueadas" });
+  }
+});
+
+router.patch("/security/ip-blocks/:id/unblock", verifyToken, isAdmin, async (req, res) => {
+  try {
+    const block = await LoginIpBlock.findById(req.params.id);
+    if (!block) return res.status(404).json({ message: "IP no encontrada" });
+
+    block.failedAttempts = 0;
+    block.blockedUntil = null;
+    block.reason = "";
+    await block.save();
+
+    await recordLog({ req, usuario: req.user?.email || "admin", descripcion: `Desbloqueo la IP ${block.ip}`, tipo: "SISTEMA", metodo: req.method, ruta: req.originalUrl });
+    res.json({ block });
+  } catch (error) {
+    res.status(500).json({ message: "Error al desbloquear IP" });
   }
 });
 

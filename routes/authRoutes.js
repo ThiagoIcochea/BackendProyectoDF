@@ -13,8 +13,10 @@ const resendApiKey = process.env.RESEND_API_KEY;
 const resendClient = resendApiKey ? new Resend(resendApiKey) : null;
 
 const User = require("../models/User");
+const LoginIpBlock = require("../models/LoginIpBlock");
 const verifyToken = require("../middlewares/verifyToken");
 const { recordLog } = require("../utils/logger");
+const { normalizeIp } = require("../utils/logger");
 const { validateRegistrationPayload, validateProfilePayload } = require("../utils/validation");
 const { sendVerificationCodeEmail } = require("../utils/emailNotifications");
 
@@ -22,6 +24,10 @@ const OTP_EXPIRE_MS = 5 * 60 * 1000;
 const RESEND_WAIT_MS = 30 * 1000;
 const BLOCK_DURATION_MS = 2 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 3;
+const MAX_LOGIN_ATTEMPTS = 5;
+const MAX_IP_LOGIN_ATTEMPTS = 12;
+const LOGIN_BLOCK_DURATION_MS = 10 * 60 * 1000;
+const IP_BLOCK_DURATION_MS = 30 * 60 * 1000;
 /** 
 const isProduction = process.env.NODE_ENV === "production";
 // En localhost/desarrollo, permitir sameSite: "none" con secure: false para cross-origin
@@ -120,17 +126,99 @@ const isBlocked = (user) => {
   return user.twoFactorBlockedUntil && user.twoFactorBlockedUntil > new Date();
 };
 
+const isLoginBlocked = (user) => {
+  return user.loginBlockedUntil && user.loginBlockedUntil > new Date();
+};
+
+const isIpBlocked = (entry) => {
+  return entry?.blockedUntil && entry.blockedUntil > new Date();
+};
+
+const registerIpFailure = async (req, email, reason = "Intento fallido") => {
+  const ip = normalizeIp(req);
+  const normalizedEmail = normalizeEmail(email);
+  const update = {
+    $set: { lastAttemptAt: new Date(), reason },
+    $inc: { failedAttempts: 1 }
+  };
+  if (normalizedEmail) {
+    update.$addToSet = { emails: normalizedEmail };
+  }
+  const entry = await LoginIpBlock.findOneAndUpdate(
+    { ip },
+    update,
+    { new: true, upsert: true }
+  );
+
+  if ((entry.failedAttempts || 0) >= MAX_IP_LOGIN_ATTEMPTS) {
+    entry.blockedUntil = new Date(Date.now() + IP_BLOCK_DURATION_MS);
+    entry.reason = "Demasiados intentos de login fallidos desde esta IP";
+    await entry.save();
+  }
+
+  return entry;
+};
+
+const registerUserLoginFailure = async (user, req, reason = "Login fallido") => {
+  user.loginFailedAttempts = (user.loginFailedAttempts || 0) + 1;
+  user.loginLastFailedAt = new Date();
+  user.loginLastIp = normalizeIp(req);
+
+  if (user.loginFailedAttempts >= MAX_LOGIN_ATTEMPTS) {
+    user.loginBlockedUntil = new Date(Date.now() + LOGIN_BLOCK_DURATION_MS);
+    user.loginFailedAttempts = 0;
+  }
+
+  await user.save();
+  await registerIpFailure(req, user.email, reason);
+};
+
+const clearLoginFailures = async (user, req) => {
+  if (!user) return;
+  user.loginFailedAttempts = 0;
+  user.loginBlockedUntil = null;
+  user.loginLastIp = normalizeIp(req);
+  await user.save();
+
+  const ip = normalizeIp(req);
+  await LoginIpBlock.updateOne(
+    { ip },
+    { $set: { failedAttempts: 0, blockedUntil: null, reason: "" } }
+  ).catch(() => {});
+};
+
 router.post("/login", async (req, res) => {
   try {
     const normalizedEmail = normalizeEmail(req.body.email);
+    const ip = normalizeIp(req);
+    const ipEntry = await LoginIpBlock.findOne({ ip });
+
+    if (isIpBlocked(ipEntry)) {
+      await recordLog({ req, usuario: normalizedEmail || "Anonimo", descripcion: "Login bloqueado por IP en lista negra temporal", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      return res.status(403).json({
+        message: "Esta IP esta bloqueada temporalmente por demasiados intentos fallidos. Contacta al administrador si fue un error.",
+        ipBlocked: true
+      });
+    }
+
     const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
+      await registerIpFailure(req, normalizedEmail, "Correo no registrado");
       await recordLog({ req, usuario: normalizedEmail, descripcion: "Intento de login con correo no registrado", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(401).json({ message: "Usuario no encontrado" });
     }
 
+    if (isLoginBlocked(user)) {
+      await recordLog({ req, usuario: user.email, descripcion: "Login bloqueado por exceso de intentos de password", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      return res.status(403).json({
+        message: "La cuenta esta bloqueada temporalmente por demasiados intentos de login. Un administrador puede desbloquearla.",
+        userBlocked: true
+      });
+    }
+
     if (user.role === "admin" && req.body.loginContext !== "admin") {
+      await registerUserLoginFailure(user, req, "Administrador intento entrar desde login general");
       await recordLog({ req, usuario: user.email, descripcion: "Intento de login de administrador desde el login general", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(403).json({
         message: "El acceso administrativo solo está permitido desde el panel dedicado.",
@@ -139,6 +227,7 @@ router.post("/login", async (req, res) => {
     }
 
     if (user.role !== "admin" && req.body.loginContext === "admin") {
+      await registerUserLoginFailure(user, req, "Usuario intento entrar al panel admin");
       await recordLog({ req, usuario: user.email, descripcion: "Intento de acceso de usuario al panel administrativo", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(403).json({ message: "No tienes permisos de administrador" });
     }
@@ -146,6 +235,7 @@ router.post("/login", async (req, res) => {
     const validPassword = await bcrypt.compare(req.body.password, user.password);
 
     if (!validPassword) {
+      await registerUserLoginFailure(user, req, "Password incorrecta");
       await recordLog({ req, usuario: user.email, descripcion: "Intento de login con contraseña incorrecta", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(401).json({ message: "Password incorrecta" });
     }
@@ -172,8 +262,12 @@ router.post("/login", async (req, res) => {
     user.twoFactorLastSentAt = now;
     user.twoFactorAttempts = 0;
     user.twoFactorBlockedUntil = null;
+    user.loginFailedAttempts = 0;
+    user.loginBlockedUntil = null;
+    user.loginLastIp = ip;
 
     await user.save();
+    await clearLoginFailures(user, req);
 
     await recordLog({ req, usuario: user.email, descripcion: "Inicio de sesión solicitado con verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
@@ -720,9 +814,14 @@ router.post("/forgot-password", async (req, res) => {
       return res.status(400).json({ message: "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo." });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(404).json({ message: "Usuario no encontrado" });
+    }
+
+    if (user.role === "admin") {
+      await recordLog({ req, usuario: user.email, descripcion: "Recuperacion admin bloqueada desde login general", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      return res.status(403).json({ message: "La contrasena de administrador solo se recupera desde access-panel-admin." });
     }
 
     const code = generateCode();
@@ -754,6 +853,61 @@ router.post("/forgot-password", async (req, res) => {
 
     return res.json({
       message: "Verifica tu correo para confirmar el cambio de contraseña",
+      tempToken,
+      twoFactorRequired: true
+    });
+  } catch (error) {
+    res.status(500).json(error);
+  }
+});
+
+router.post("/admin/forgot-password", async (req, res) => {
+  try {
+    const { email, newPassword } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+
+    if (!normalizedEmail || !newPassword) {
+      return res.status(400).json({ message: "Correo y nueva contrasena requeridos" });
+    }
+
+    if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(String(newPassword))) {
+      return res.status(400).json({ message: "La nueva contrasena debe tener al menos 8 caracteres, una letra, un numero y un simbolo." });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user || user.role !== "admin") {
+      return res.status(404).json({ message: "Administrador no encontrado" });
+    }
+
+    const code = generateCode();
+    const tempToken = generateTempToken();
+    const now = new Date();
+
+    pendingPasswordChanges.set(tempToken, {
+      email: normalizedEmail,
+      newPassword,
+      kind: "admin-forgot"
+    });
+
+    const emailResult = await sendTwoFactorCode(user, "email", code);
+    if (emailResult?.error) {
+      pendingPasswordChanges.delete(tempToken);
+      return res.status(502).json({ message: emailResult.message || "No se pudo enviar el codigo por correo." });
+    }
+
+    user.twoFactorCode = code;
+    user.twoFactorMethod = "email";
+    user.twoFactorTempToken = tempToken;
+    user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
+    user.twoFactorLastSentAt = now;
+    user.twoFactorAttempts = 0;
+    user.twoFactorBlockedUntil = null;
+    await user.save();
+
+    await recordLog({ req, usuario: user.email, descripcion: "Recuperacion de contrasena admin iniciada", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+
+    return res.json({
+      message: "Verifica tu correo para confirmar el cambio de contrasena de administrador",
       tempToken,
       twoFactorRequired: true
     });

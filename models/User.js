@@ -41,6 +41,13 @@ const UserSchema = new mongoose.Schema({
     twoFactorBlockedUntil: Date,
     twoFactorLastSentAt: Date,
     twoFactorMethod: String,
+    loginFailedAttempts: {
+        type: Number,
+        default: 0
+    },
+    loginBlockedUntil: Date,
+    loginLastFailedAt: Date,
+    loginLastIp: String,
 
     paymentmethod:{
         nombretarjeta: String,

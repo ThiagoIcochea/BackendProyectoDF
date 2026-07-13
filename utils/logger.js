@@ -40,4 +40,4 @@ const recordLog = async ({ req, usuario, descripcion, tipo = "SISTEMA", metodo =
   }
 };
 
-module.exports = { recordLog };
+module.exports = { recordLog, normalizeIp, normalizeUserAgent };

@@ -1071,6 +1071,8 @@ const handleCheckoutRequest = async (text, session) => {
     session.pendingMfaAction = null;
     session.cartItems = [];
     return `Listo, generÃ© el pedido con ${pending.deliveryType === "shipping" ? "envÃ­o a domicilio" : "recojo en tienda"}. El nÃºmero de pedido es ${payment.documento}.`;
+  }
+};
 const handleClaimRequest = async (text, session) => {
   if (!session?.userId) return null;
   const normalized = String(text || "").trim();
@@ -1120,6 +1122,7 @@ const handleClaimRequest = async (text, session) => {
       status: "pending"
     });
     session.pendingClaim = null;
+    setSessionMeta(session, { type: "navigate", path: "/pedidos", focus: "claims", deliveryId: String(delivery._id) });
     return `Listo, registré tu reclamo para el pedido ${String(delivery._id).slice(-6).toUpperCase()}. Quedó pendiente de revisión.`;
   }
 
@@ -1153,7 +1156,16 @@ const handleClaimRequest = async (text, session) => {
   }
 
   const category = parsed.category;
-  const description = parsed.description || "Reclamo generado por el asistente";
+  const description = parsed.description || "Reclamo generado por el asistente para revision del pedido.";
+  const existingClaims = await Claim.find({ delivery: delivery._id, status: "pending" }).lean().catch(() => []);
+  const decision = canCreateClaim({
+    category,
+    currentStatus: delivery.status,
+    deadlineDate: delivery.estimatedDate || delivery.paymentId?.fecha,
+    existingClaims
+  }, new Date());
+  if (!decision.allowed) return decision.reason;
+
   session.pendingClaim = null;
   await Claim.create({
     delivery: delivery._id,
@@ -1164,6 +1176,7 @@ const handleClaimRequest = async (text, session) => {
     resolution: "pending",
     status: "pending"
   });
+  setSessionMeta(session, { type: "navigate", path: "/pedidos", focus: "claims", deliveryId: String(delivery._id) });
   return `Listo, registré un reclamo para el pedido ${String(delivery._id).slice(-6).toUpperCase()} con categoría ${category}. Quedó pendiente de revisión.`;
 };
 const handleCancelOrderRequest = async (text, session) => {
@@ -1257,7 +1270,12 @@ const findUserDeliveryById = async (userId, rawId) => {
     return Delivery.findOne(query).populate("paymentId").lean().catch(() => null);
   }
   const deliveries = await Delivery.find({ user: userId }).populate("paymentId").lean().catch(() => []);
-  return deliveries.find((delivery) => String(delivery._id).slice(-6).toLowerCase() === id.toLowerCase()) || null;
+  return deliveries.find((delivery) => {
+    const needle = id.toLowerCase();
+    const deliverySuffix = String(delivery._id).slice(-6).toLowerCase();
+    const paymentDocument = String(delivery.paymentId?.documento || "").toLowerCase();
+    return deliverySuffix === needle || paymentDocument === needle || paymentDocument.endsWith(needle);
+  }) || null;
 };
 
 const findDeliveriesByProductHint = async (userId, hint) => {
