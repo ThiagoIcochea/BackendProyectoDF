@@ -1,9 +1,9 @@
-const STATUS_ORDER = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled", "returned"];
+const STATUS_ORDER = ["pending", "shipped", "ready_for_pickup", "delivered", "cancelled", "returned"];
 
 const STATUS_TRANSITIONS = {
-  pending: ["ready_for_pickup", "cancelled"],
-  ready_for_pickup: ["shipped", "cancelled"],
-  shipped: ["delivered", "cancelled"],
+  pending: ["shipped", "cancelled"],
+  shipped: ["ready_for_pickup", "cancelled"],
+  ready_for_pickup: ["delivered", "cancelled"],
   delivered: ["returned"],
   cancelled: [],
   returned: []

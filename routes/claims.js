@@ -168,7 +168,10 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
 
     const delivery = await Delivery.findById(claim.delivery._id).session(session);
     if (delivery) {
-      if (newDeliveryStatus === 'cancelled') {
+      if (newDeliveryStatus === 'pending') {
+        delivery.status = 'pending';
+        syncStatusHistory(delivery, 'pending', { note: resolution || `Reclamo ${claim.status}` });
+      } else if (newDeliveryStatus === 'cancelled') {
         const adminUser = await User.findById(req.user.id).session(session);
         if (!adminUser) {
           return res.status(404).json({ message: 'Administrador no encontrado.' });
@@ -191,11 +194,11 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
 
       if (newDeliveryStatus) {
         const currentStatus = delivery.status;
-        const allowed = ['pending','ready_for_pickup','shipped','delivered','cancelled','returned'];
+        const allowed = ['pending','shipped','ready_for_pickup','delivered','cancelled','returned'];
         if (!allowed.includes(newDeliveryStatus)) {
           return res.status(400).json({ message: 'Estado de entrega inválido.' });
         }
-        const isAllowedTransition = newDeliveryStatus === currentStatus || ['cancelled','returned'].includes(newDeliveryStatus) && ['pending','ready_for_pickup','shipped','delivered'].includes(currentStatus);
+        const isAllowedTransition = newDeliveryStatus === currentStatus || newDeliveryStatus === 'pending' || (newDeliveryStatus === 'cancelled' && ['pending','shipped','ready_for_pickup','delivered'].includes(currentStatus)) || (newDeliveryStatus === 'returned' && ['delivered'].includes(currentStatus));
         if (!isAllowedTransition) {
           return res.status(400).json({ message: 'El reclamo solo puede mover el pedido a un estado válido y permitido por la logística.' });
         }

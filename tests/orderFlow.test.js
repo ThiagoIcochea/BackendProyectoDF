@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { calculateDeliveryDeadline, canCreateClaim } = require('../utils/orderFlow');
+const { isValidStatusTransition } = require('../utils/deliveryStatusFlow');
 
 test('calculateDeliveryDeadline uses the highest delivery window among products', () => {
   const createdAt = new Date('2026-07-01T00:00:00.000Z');
@@ -68,4 +69,11 @@ test('canCreateClaim allows a cancellation claim when the order has been cancell
   }, new Date('2026-07-07T00:00:00.000Z'));
 
   assert.equal(result.allowed, true);
+});
+
+test('delivery status flow allows pending -> shipped -> ready_for_pickup -> delivered in order', () => {
+  assert.equal(isValidStatusTransition('pending', 'shipped'), true);
+  assert.equal(isValidStatusTransition('shipped', 'ready_for_pickup'), true);
+  assert.equal(isValidStatusTransition('ready_for_pickup', 'delivered'), true);
+  assert.equal(isValidStatusTransition('ready_for_pickup', 'shipped'), false);
 });
