@@ -205,22 +205,53 @@ const extractRequestedMfaMethod = (text) => {
   return normalizeMfaMethod(explicitMethod ? explicitMethod[1] : "email");
 };
 
+const isClaimIntent = (text) => {
+  const normalized = String(text || "").trim();
+  if (!normalized) return false;
+  const lowered = stripAccents(normalized).toLowerCase();
+  if (/\b(hola|buenos|buenas|gracias|adios|adiós|estoy bien|todo bien|como estas|como estás)\b/i.test(normalized)) return false;
+  const hasClaimKeyword = /\b(reclamo|reclamar|queja|quejas|problema|problemas|incidente|fallo|fallar|falló|dañado|dañada|incompleto|incompleta|retraso|demora|demorado|cancelacion|cancelación|devolucion|devolución|reembolso|refund|error|no lleg[óo]|lleg[óo]|lleg[ao]|entreg[ao]|roto|rota|perdido|perdida)\b/i.test(lowered);
+  const hasOrderContext = /\b(pedido|orden|compra|producto|envio|envío|entrega|delivery|articulo|artículo)\b/i.test(lowered);
+  const hasAction = /\b(hacer|crear|abrir|generar|registrar|presentar|quiero|necesito|tengo|me|mi)\b/i.test(lowered);
+  return hasClaimKeyword || (hasOrderContext && hasAction);
+};
+
+const inferClaimCategory = (text) => {
+  const normalized = stripAccents(String(text || "").trim()).toLowerCase();
+  const priority = [
+    /\b(incompleto|incompleta|faltante|falta|faltan|mal|dañado|daniado|roto|rota|quebrado|quebrada)\b/i,
+    /\b(demora|retraso|tarde|atrasado|atrasada)\b/i,
+    /\b(devolucion|devolución|devolutiva|reembolso|refund|regreso)\b/i,
+    /\b(cancelacion|cancelación|cancelar)\b/i,
+    /\b(fallo|fallo|error|problema|incidente)\b/i
+  ];
+
+  for (const pattern of priority) {
+    if (pattern.test(normalized)) {
+      const match = normalized.match(pattern);
+      const raw = match?.[0] || "";
+      return CLAIM_CATEGORY_ALIASES[raw] || CLAIM_CATEGORY_ALIASES[raw.toLowerCase()] || "delay";
+    }
+  }
+
+  return "delay";
+};
+
 const parseClaimRequest = (text) => {
   const normalized = String(text || "").trim();
-  if (!normalized) return null;
+  if (!normalized || !isClaimIntent(normalized)) return null;
   const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero)[^0-9]*(\d{2,})/i);
-  const categoryMatch = normalized.match(/\b(demora|retraso|incompleto|dañado|dañado|devuelta|devoluci[oó]n|cancelaci[oó]n|cancelar|fallo|error)\b/i);
-  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una)\s+/gi, " ").trim();
+  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo)\s+/gi, " ").trim();
   return {
     orderNumber: orderMatch?.[1] || null,
-    category: categoryMatch ? CLAIM_CATEGORY_ALIASES[String(categoryMatch[1]).toLowerCase()] || "delay" : "delay",
+    category: inferClaimCategory(normalized),
     description: description || "Reclamo generado por el asistente"
   };
 };
 
 const parseCheckoutIntent = (text) => {
   const normalized = String(text || "").trim();
-  if (!/(crear|generar|hacer|armar|confirmar).*(pedido|orden|compra)/i.test(normalized) && !/(pedido|orden|compra).*(crear|generar|hacer|armar|confirmar)/i.test(normalized)) {
+  if (!/\b(crear|crea|generar|hacer|armar|confirmar|comprar|ordenar)\b/i.test(normalized) || !/\b(pedido|orden|compra)\b/i.test(normalized)) {
     return null;
   }
   const deliveryType = parseDeliveryPreference(normalized);

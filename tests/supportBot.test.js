@@ -163,11 +163,24 @@ test('extractRequestedMfaMethod ignores casing and picks the requested channel',
   assert.equal(extractRequestedMfaMethod('envíame el código por LlAmAdA'), 'call');
 });
 
+test('buildSupportBotReply does not misclassify a greeting as a claim request', async () => {
+  const session = createSupportSession();
+  const reply = await buildSupportBotReply('hola', session);
+  assert.doesNotMatch(reply, /No encontré un pedido asociado/i);
+  assert.match(reply, /NendoBot|pedidos|productos/i);
+});
+
 test('parseClaimRequest extracts the order and issue category from a claim request', () => {
   const parsed = parseClaimRequest('quiero hacer un reclamo por mi pedido 123456 por demora');
   assert.equal(parsed.orderNumber, '123456');
   assert.equal(parsed.category, 'delay');
   assert.match(parsed.description, /demora/i);
+});
+
+test('parseClaimRequest handles synonyms and natural wording', () => {
+  const parsed = parseClaimRequest('tengo un problema con mi compra y llegó incompleto');
+  assert.equal(parsed.category, 'incomplete');
+  assert.match(parsed.description, /problema|incompleto/i);
 });
 
 test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
