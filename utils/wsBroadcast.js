@@ -166,12 +166,15 @@ const handleClientMessage = async (socket, message) => {
       socket.supportSession = session;
       
       const replyText = await buildSupportBotReply(normalizedText, session);
+      const botMeta = session.lastBotMeta || null;
+      session.lastBotMeta = null;
       const assistantMessage = await persistMessage({
         roomKey,
         username: "NendoBot",
         text: replyText,
         profileImg: "",
-        role: "assistant"
+        role: "assistant",
+        meta: botMeta ? { action: botMeta } : {}
       });
       broadcastToRoom(roomKey, { type: "room-message", message: assistantMessage });
     }

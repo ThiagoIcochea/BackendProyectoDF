@@ -88,8 +88,12 @@ test('buildSupportBotReply answers expensive-product requests directly', async (
   assert.match(reply, /caro|costoso|precio/i);
 });
 
-test('buildSupportBotReply handles cart requests directly', async () => {
+test('buildSupportBotReply executes cart requests directly without showing internal routes', async () => {
   const session = createSupportSession();
   const reply = await buildSupportBotReply('agrega un producto al carrito', session);
   assert.match(reply, /carrito/i);
+  assert.match(reply, /agreg|añad|listo/i);
+  assert.doesNotMatch(reply, /ruta interna/i);
+  assert.equal(Array.isArray(session.cartItems), true);
+  assert.ok(session.cartItems.length >= 1);
 });

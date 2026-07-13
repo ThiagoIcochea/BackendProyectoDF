@@ -15,13 +15,20 @@ const normalizeUserAgent = (reqOrUserAgent) => {
   return reqOrUserAgent.get?.("user-agent") || reqOrUserAgent.headers?.["user-agent"] || "unknown";
 };
 
+const normalizeLogType = (value) => {
+  const normalized = String(value || "SISTEMA").trim().toUpperCase();
+  return ["TRANSACCION", "ERROR", "SISTEMA", "AUTH", "PEDIDO", "RECLAMO", "CARRITO", "PRODUCTO"].includes(normalized)
+    ? normalized
+    : "SISTEMA";
+};
+
 const recordLog = async ({ req, usuario, descripcion, tipo = "SISTEMA", metodo = "GET", ruta = "/", userAgent, ip }) => {
   try {
     const payload = {
       ip: ip || normalizeIp(req),
       usuario: usuario || req?.user?.email || req?.user?.name || "Anónimo",
       descripcion,
-      tipo,
+      tipo: normalizeLogType(tipo),
       metodo: metodo || req?.method || "GET",
       ruta: ruta || req?.originalUrl || req?.path || "/",
       userAgent: userAgent || normalizeUserAgent(req)

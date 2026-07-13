@@ -1,13 +1,20 @@
+const crypto = require("crypto");
+const { Resend } = require("resend");
 const Payment = require("../models/Payment");
 const Product = require("../models/Product");
 const Claim = require("../models/Claim");
 const Delivery = require("../models/Delivery");
+const User = require("../models/User");
 const { getGroqApiKey, callGroq, parseGroqJson } = require("../utils/groqClient");
 const { canCreateClaim } = require("./orderFlow");
 const { evaluateClaimDescription } = require("./claimReview");
+const { syncStatusHistory } = require("./deliveryStatusHistory");
+const { recordLog } = require("./logger");
 
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || process.env.REACT_APP_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://nendoshop.onrender.com");
 const PRODUCT_DETAIL_PATH = "/product";
+const OTP_EXPIRE_MS = 5 * 60 * 1000;
+const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const ACTION_ROUTE_MAP = {
   product_search: "/api/products/search",
   product_detail: "/api/products/:id",
@@ -137,7 +144,10 @@ const createSupportSession = (customerName = "cliente") => ({
   lastTopic: null,
   customerName: normalizeCustomerName(customerName),
   surveyAsked: false,
-  history: [] 
+  history: [],
+  cartItems: [],
+  pendingMfaAction: null,
+  lastBotMeta: null
 });
 
 const pushHistory = (session, role, text) => {
@@ -265,6 +275,216 @@ const toPaymentFact = (payment) => ({
   total: payment.total || 0
 });
 
+const setSessionMeta = (session, meta) => {
+  if (!session) return;
+  session.lastBotMeta = meta || null;
+};
+
+const ensureCartSession = (session) => {
+  if (!session) return null;
+  if (!Array.isArray(session.cartItems)) session.cartItems = [];
+  return session;
+};
+
+const addProductToCartSession = async (session, hint) => {
+  const activeSession = ensureCartSession(session);
+  if (!activeSession) return null;
+
+  let product = null;
+  if (hint) {
+    const products = await findProductsByHint(hint);
+    product = products[0] || null;
+  }
+
+  if (!product) {
+    try {
+      product = await Product.findOne({ stock: { $gt: 0 } }).sort({ price: 1, stock: -1 }).lean();
+    } catch (err) {
+      product = null;
+    }
+  }
+
+  if (!product) {
+    const fallbackName = hint ? `Producto sugerido: ${hint}` : "Producto recomendado";
+    product = {
+      _id: `fallback-${Date.now()}`,
+      name: fallbackName,
+      price: 0,
+      stock: 1
+    };
+  }
+
+  const existingItem = activeSession.cartItems.find((item) => String(item.id) === String(product._id));
+  if (existingItem) {
+    existingItem.quantity = (existingItem.quantity || 1) + 1;
+  } else {
+    activeSession.cartItems.push({
+      id: product._id,
+      name: product.name,
+      price: product.price || 0,
+      quantity: 1
+    });
+  }
+
+  setSessionMeta(session, {
+    type: "cart_add",
+    product: {
+      id: product._id,
+      name: product.name,
+      price: product.price || 0,
+      quantity: 1,
+      image: product.image || ""
+    }
+  });
+
+  return product;
+};
+
+const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const generateTempToken = () => crypto.randomBytes(24).toString("hex");
+
+const sendActionMfaCode = async (user, code, method = "email") => {
+  const selectedMethod = String(method || "email").toLowerCase();
+  if (selectedMethod === "console" || !resendClient) {
+    console.log(`[MFA supportBot] Código para ${user.email}: ${code}`);
+    return { sentBy: "console" };
+  }
+
+  const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
+  await resendClient.emails.send({
+    from,
+    to: user.email,
+    subject: "Código de verificación - Nendoshop",
+    text: `Hola ${user.name || user.email}, tu código de verificación es ${code}. Expira en 5 minutos.`,
+    html: `<p>Hola ${user.name || user.email},</p><p>Tu código de verificación es:</p><h2>${code}</h2><p>Expira en 5 minutos.</p>`
+  });
+  return { sentBy: "email" };
+};
+
+const issueActionMfa = async (user, method = "email") => {
+  const code = generateCode();
+  const tempToken = generateTempToken();
+  const now = new Date();
+  const selectedMethod = String(method || "email").toLowerCase();
+  await sendActionMfaCode(user, code, selectedMethod);
+
+  user.twoFactorCode = code;
+  user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
+  user.twoFactorTempToken = tempToken;
+  user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
+  user.twoFactorLastSentAt = now;
+  user.twoFactorAttempts = 0;
+  user.twoFactorBlockedUntil = null;
+  await user.save();
+  return tempToken;
+};
+
+const verifyActionMfa = async (user, tempToken, code) => {
+  const now = new Date();
+  const valid = user.twoFactorTempToken === tempToken &&
+    Boolean(user.twoFactorCode) &&
+    user.twoFactorCode === String(code || "").trim() &&
+    user.twoFactorExpires &&
+    user.twoFactorExpires >= now;
+
+  if (!valid) return false;
+
+  user.twoFactorCode = null;
+  user.twoFactorExpires = null;
+  user.twoFactorTempToken = null;
+  user.twoFactorAttempts = 0;
+  user.twoFactorBlockedUntil = null;
+  user.twoFactorLastSentAt = null;
+  user.twoFactorMethod = null;
+  await user.save();
+  return true;
+};
+
+const handleProfileUpdateRequest = async (text, session) => {
+  if (!session?.userId) return null;
+  const normalized = String(text || "").trim();
+  if (!/(cambiar|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna)/i.test(normalized)) {
+    return null;
+  }
+
+  const user = await User.findById(session.userId).catch(() => null);
+  if (!user) return null;
+
+  const fieldMap = [
+    { label: "nombre", pattern: /(nombre|name)\b/i, field: "name" },
+    { label: "apellido", pattern: /(apellido|lastname|last name)\b/i, field: "lastname" },
+    { label: "dirección", pattern: /(dirección|direccion|address|domicilio)\b/i, field: "address" },
+    { label: "ciudad", pattern: /(ciudad|city)\b/i, field: "city" },
+    { label: "teléfono", pattern: /(teléfono|telefono|phone|celular)\b/i, field: "phone" }
+  ];
+
+  for (const field of fieldMap) {
+    const match = normalized.match(new RegExp(`(?:${field.label}|${field.field})[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'/-]+)$`, "i"));
+    if (match && match[1]) {
+      user[field.field] = match[1].trim();
+      await user.save();
+      return `Listo, actualicé tu ${field.label}.`;
+    }
+  }
+
+  return "Puedo actualizar tu perfil. Díme qué dato quieres cambiar y el nuevo valor, por ejemplo: cambia mi dirección a Av. Siempre Viva 123.";
+};
+
+const handleCancelOrderRequest = async (text, session) => {
+  if (!session?.userId) return null;
+  const normalized = String(text || "").trim();
+  if (!/(cancelar|anular|cancelacion|cancelación).*(pedido|orden|compra)/i.test(normalized) && !/(pedido|orden|compra).*(cancelar|anular)/i.test(normalized)) {
+    return null;
+  }
+
+  const user = await User.findById(session.userId).catch(() => null);
+  if (!user) return "No encuentro tu cuenta para cancelar el pedido.";
+
+  const existingPending = session.pendingMfaAction;
+  if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_method") {
+    const method = /correo|email/i.test(normalized) ? "email" : /consola|console/i.test(normalized) ? "console" : null;
+    if (!method) {
+      return "Para confirmar la cancelación necesito el método de verificación: correo o consola.";
+    }
+    const tempToken = await issueActionMfa(user, method);
+    session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_code", deliveryId: existingPending.deliveryId, tempToken, method };
+    return `Te envié el código por ${method === "email" ? "correo" : "consola"}. Envíame el código de 6 dígitos para confirmar.`;
+  }
+
+  if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_code") {
+    const code = normalized.match(/\b(\d{6})\b/);
+    if (!code) {
+      return "Envíame el código de 6 dígitos que te envié para confirmar la cancelación.";
+    }
+
+    const ok = await verifyActionMfa(user, existingPending.tempToken, code[1]);
+    if (!ok) {
+      return "El código no es válido o ya expiró. Solicita uno nuevo para continuar.";
+    }
+
+    const delivery = await Delivery.findById(existingPending.deliveryId).catch(() => null);
+    if (!delivery) return "No encontré ese pedido para cancelarlo.";
+    if (!(["pending", "ready_for_pickup"].includes(delivery.status))) {
+      session.pendingMfaAction = null;
+      return `El pedido ya no se puede cancelar porque está en estado ${delivery.status}.`;
+    }
+
+    delivery.status = "cancelled";
+    delivery.cancellationReason = "Cancelado por el asistente con MFA";
+    syncStatusHistory(delivery, "cancelled", { note: delivery.cancellationReason });
+    await delivery.save();
+    await recordLog({ req: { user: { id: session.userId, email: user.email } }, usuario: user.email, descripcion: `Pedido ${delivery._id} cancelado por asistente`, tipo: "PEDIDO", metodo: "BOT", ruta: "/chatbot" });
+    session.pendingMfaAction = null;
+    return `Listo, cancelé tu pedido y quedó marcado como cancelado.`;
+  }
+
+  const delivery = await Delivery.findOne({ user: session.userId, status: { $in: ["pending", "ready_for_pickup"] } }).sort({ createdAt: -1 }).catch(() => null);
+  if (!delivery) return "No encuentro un pedido activo que pueda cancelar en este momento.";
+
+  session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_method", deliveryId: delivery._id };
+  return "Para confirmar la cancelación necesito verificar tu identidad. ¿Prefieres que te envíe el código por correo o por consola?";
+};
+
 const CLAIM_CATEGORY_ALIASES = {
   demora: "delay",
   delay: "delay",
@@ -308,26 +528,25 @@ const buildOrderSummary = (delivery) => {
   const history = (delivery.statusHistory || []).map((entry) => `${statusLabel(entry.status)} (${entry.timestamp ? new Date(entry.timestamp).toLocaleDateString("es-PE") : "sin fecha"})`).join(" > ");
   return `Pedido ${String(delivery._id).slice(-6).toUpperCase()}: ${statusLabel(delivery.status)}. Productos: ${products || "sin productos registrados"}. Tracking: ${history || statusLabel(delivery.status)}.`;
 };
-const resolveActionRequest = async (text) => {
+const resolveActionRequest = async (text, session = null) => {
   const normalized = String(text || "").trim();
   if (!normalized) return null;
 
   if (/(producto|figura|art[ií]culo|articulo).{0,20}(m[áa]s\s+caro|m[áa]s\s+costoso|mayor\s+precio|precio\s+mayor)/i.test(normalized) || /(?:m[áa]s\s+caro|m[áa]s\s+costoso|mayor\s+precio|precio\s+mayor)/i.test(normalized)) {
     const expensiveProduct = await findMostExpensiveProduct();
     if (!expensiveProduct) return "No tengo productos registrados en este momento para comparar precios.";
-    return `El producto más caro que tengo registrado es "${expensiveProduct.name}" con precio S/. ${expensiveProduct.price}. Ruta interna: ${ACTION_ROUTE_MAP.product_most_expensive}. Puedes revisar el detalle aquí: ${buildProductLink(expensiveProduct._id)}`;
+    return `El producto más caro que tengo registrado es "${expensiveProduct.name}" con precio S/. ${expensiveProduct.price}. Puedes revisarlo aquí: ${buildProductLink(expensiveProduct._id)}`;
   }
 
   if (/(agregar|añadir|sumar).*(carrito|cart)/i.test(normalized) || /(carrito|cart)/i.test(normalized)) {
     const hint = extractProductHint(normalized);
-    if (hint) {
-      const products = await findProductsByHint(hint);
-      const product = products[0];
-      if (product) {
-        return `Preparé una acción de carrito para "${product.name}". Ruta interna: ${ACTION_ROUTE_MAP.cart_add}. Puedes abrir su detalle aquí: ${buildProductLink(product._id)}`;
-      }
+    const product = await addProductToCartSession(session, hint);
+
+    if (product) {
+      return `Listo, añadí "${product.name}" a tu carrito para que lo sigas revisando.`;
     }
-    return `Puedo ayudarte con el carrito. Ruta interna: ${ACTION_ROUTE_MAP.cart_add}. Si me dices el producto, te preparo la acción con el enlace directo.`;
+
+    return "Puedo ayudarte con el carrito, pero por ahora no encuentro un producto disponible para agregar.";
   }
 
   return null;
@@ -335,16 +554,38 @@ const resolveActionRequest = async (text) => {
 const handleAutomationCommand = async (text, session) => {
   const userId = session?.userId;
   const normalized = String(text || "").trim();
-  if (!/^\/|^(ver|consultar|crear|generar|cancelar|cambiar)/i.test(normalized)) return null;
+  const shouldHandle = /^\/|^(ver|consultar|crear|generar|cancelar|cambiar|actualizar|modificar|editar|agregar|añadir|busca|muestra|dime|revisa|ayuda|quiero|necesito|puedes)/i.test(normalized) || /(mis pedidos|mis ordenes|mis compras|pedido|orden|producto|productos|perfil|dirección|direccion|teléfono|telefono|ciudad|carrito|cart|cancelar|cambiar|actualizar|modificar|editar)/i.test(normalized);
+
+  if (!shouldHandle) return null;
 
   if (!userId) {
     return "Para ejecutar acciones necesito que escribas desde tu cuenta iniciada. Puedo orientarte, pero no modificar ni consultar pedidos sin identificarte.";
   }
 
-  if (/^\/?(mis[-\s]?pedidos|ordenes|órdenes)$/i.test(normalized)) {
+  if (/^\/?(mis[-\s]?pedidos|ordenes|órdenes|mis pedidos|mis ordenes|mis compras)$/i.test(normalized) || /(mis pedidos|mis ordenes|mis compras)/i.test(normalized)) {
     const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).limit(5).lean().catch(() => []);
     if (!deliveries.length) return "No encuentro pedidos asociados a tu cuenta. Si acabas de pagar, espera unos segundos y vuelve a consultar.";
     return deliveries.map(buildOrderSummary).join("\n");
+  }
+
+  if (/(productos|catalogo|catálogo|stock|inventario|figuras)/i.test(normalized)) {
+    const products = await Product.find().limit(10).lean().catch(() => []);
+    if (!products.length) return "No encuentro productos disponibles en este momento.";
+    return products.map((product) => `${product.name} - S/. ${product.price || 0} - stock ${product.stock || 0}`).join("\n");
+  }
+
+  if (/(perfil|mis datos|datos|nombre|apellido|dirección|direccion|ciudad|teléfono|telefono)/i.test(normalized)) {
+    const user = await User.findById(userId).select("-password").lean().catch(() => null);
+    if (!user) return "No puedo ver tu perfil sin que estés autenticado.";
+    const details = [
+      `Nombre: ${user.name || "sin registrar"}`,
+      `Apellido: ${user.lastname || "sin registrar"}`,
+      `Email: ${user.email || "sin registrar"}`,
+      `Dirección: ${user.address || "sin registrar"}`,
+      `Ciudad: ${user.city || "sin registrar"}`,
+      `Teléfono: ${user.phone || "sin registrar"}`
+    ];
+    return `Estos son tus datos actuales:\n${details.join("\n")}`;
   }
 
   const orderMatch = normalized.match(/(?:pedido|orden|detalle|estado)\s+#?([a-f0-9]{24}|[a-z0-9]{6})/i);
@@ -382,7 +623,7 @@ const handleAutomationCommand = async (text, session) => {
     return "Listo, registré tu reclamo y quedó pendiente de revisión por administración. Puedes seguir el avance desde Mis Pedidos.";
   }
 
-  const actionReply = await resolveActionRequest(normalized);
+  const actionReply = await resolveActionRequest(normalized, session);
   if (actionReply) return actionReply;
 
   if (/contrase|password/i.test(normalized)) {
@@ -662,11 +903,25 @@ const getSupportBotReply = async (input, session) => {
     return safeBlockedReply(customerName);
   }
 
-  const actionReply = await resolveActionRequest(text);
+  const actionReply = await resolveActionRequest(text, session);
   if (actionReply) {
     pushHistory(session, "user", text);
     pushHistory(session, "bot", actionReply);
     return actionReply;
+  }
+
+  const profileReply = await handleProfileUpdateRequest(text, session);
+  if (profileReply) {
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", profileReply);
+    return profileReply;
+  }
+
+  const cancelReply = await handleCancelOrderRequest(text, session);
+  if (cancelReply) {
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", cancelReply);
+    return cancelReply;
   }
 
   if (session.step === "welcome") {
