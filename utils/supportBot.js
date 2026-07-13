@@ -451,6 +451,19 @@ const findMostExpensiveProduct = async () => {
   }
 };
 
+const findBestDiscountProduct = async () => {
+  try {
+    const products = await Product.find({}).lean();
+    if (!products.length) return null;
+    return products
+      .filter((product) => Number(product.discount || 0) > 0)
+      .sort((a, b) => Number(b.discount || 0) - Number(a.discount || 0) || Number(b.price || 0) - Number(a.price || 0))[0] || null;
+  } catch (err) {
+    console.error("No se pudo consultar el producto con mayor descuento:", err.message);
+    return null;
+  }
+};
+
 const getDisplayPrice = (product) => {
   const price = Number(product?.price || 0);
   const discount = Number(product?.discount || 0);
@@ -923,6 +936,25 @@ const findUserDeliveryById = async (userId, rawId) => {
   return deliveries.find((delivery) => String(delivery._id).slice(-6).toLowerCase() === id.toLowerCase()) || null;
 };
 
+const findDeliveriesByProductHint = async (userId, hint) => {
+  if (!userId || !hint) return [];
+  const searchTokens = normalizeSearchTokens(String(hint || ""));
+  if (!searchTokens.length) return [];
+
+  try {
+    const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).lean();
+    return deliveries.filter((delivery) => {
+      const products = Array.isArray(delivery.paymentId?.productos) ? delivery.paymentId.productos : [];
+      return products.some((product) => {
+        const haystack = stripAccents(String(product?.name || "").toLowerCase());
+        return searchTokens.some((token) => haystack.includes(token));
+      });
+    });
+  } catch (err) {
+    return [];
+  }
+};
+
 const buildOrderSummary = (delivery) => {
   const payment = delivery.paymentId || {};
   const products = (payment.productos || []).map((item) => `${item.name} x${item.quantity}`).join(", ");
@@ -937,6 +969,15 @@ const resolveActionRequest = async (text, session = null) => {
     const expensiveProduct = await findMostExpensiveProduct();
     if (!expensiveProduct) return "No tengo productos registrados en este momento para comparar precios.";
     return `El producto más caro que tengo registrado es "${expensiveProduct.name}" con precio S/. ${expensiveProduct.price}. Puedes revisarlo aquí: ${buildProductLink(expensiveProduct._id)}`;
+  }
+
+  if (/(producto|figura|art[ií]culo|articulo).{0,20}(m[áa]s\s+descuento|mayor\s+descuento|mejor\s+oferta|oferta\s+mejor|descuento\s+m[áa]s\s+alto)/i.test(normalized) || /(?:m[áa]s\s+descuento|mayor\s+descuento|mejor\s+oferta|oferta\s+mejor|descuento\s+m[áa]s\s+alto)/i.test(normalized)) {
+    const discountedProduct = await findBestDiscountProduct();
+    if (!discountedProduct) return "No tengo productos con descuento disponible en este momento.";
+    const price = Number(discountedProduct.price || 0);
+    const discount = Number(discountedProduct.discount || 0);
+    const finalPrice = (price * (1 - discount)).toFixed(2);
+    return `El producto con mayor descuento que tengo es "${discountedProduct.name}" con ${Math.round(discount * 100)}% de descuento, precio final S/. ${finalPrice}. Puedes revisarlo aquí: ${buildProductLink(discountedProduct._id)}`;
   }
 
   if (/(agregar|añadir|sumar).*(carrito|cart)/i.test(normalized) || /(carrito|cart)/i.test(normalized)) {
@@ -1036,6 +1077,15 @@ const handleAutomationCommand = async (text, session) => {
   if (actionReply) return actionReply;
 
   const context = buildKeyValueContext(normalized);
+  const productHint = extractProductHint(normalized);
+  if ((/pedido|orden/i.test(normalized)) && (/producto|articulo|artículo|figura/i.test(normalized) || productHint)) {
+    const matchingDeliveries = await findDeliveriesByProductHint(userId, productHint || normalized);
+    if (matchingDeliveries.length) {
+      return matchingDeliveries.map(buildOrderSummary).join("\n");
+    }
+    return "No encontré pedidos relacionados con ese producto en tu cuenta.";
+  }
+
   if (context.intent === "productos" || context.intent === "carrito") {
     const products = await findProductsByHint(context.productHint || normalized);
     if (products.length) {
@@ -1053,7 +1103,7 @@ const handleAutomationCommand = async (text, session) => {
   }
 
   if (context.intent === "pedidos") {
-    const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).limit(5).lean().catch(() => []);
+    const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).lean().catch(() => []);
     if (deliveries.length) {
       return deliveries.map(buildOrderSummary).join("\n");
     }
@@ -1071,7 +1121,36 @@ const handleAutomationCommand = async (text, session) => {
   }
 
   if (/crear\s+pedido|comprar|ordenar/i.test(normalized)) {
-    return "Puedo ayudarte a encontrar productos y revisar stock. Para crear un pedido real usa el carrito y el checkout, porque ahí se valida pago, dirección y comprobante sin exponer datos sensibles en el chat.";
+    const cartItems = Array.isArray(session?.cartItems) ? session.cartItems : [];
+    if (!cartItems.length) return "Tu carrito está vacío. Agrega productos primero y te ayudo a convertirlos en un pedido real.";
+
+    const user = await User.findById(userId).catch(() => null);
+    if (!user) return "No encuentro tu cuenta para crear el pedido.";
+
+    const total = cartItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0);
+    const payment = await Payment.create({
+      cliente: user.name || user.email,
+      documento: `BOT-${Date.now().toString().slice(-6)}`,
+      productos: cartItems.map((item) => ({ name: item.name, quantity: item.quantity, price: item.price })),
+      total,
+      deliveryType: "shipping",
+      metodo_envio: "delivery",
+      estado: "Pagado"
+    });
+
+    const delivery = await Delivery.create({
+      paymentId: payment._id,
+      user: userId,
+      deliveryType: "shipping",
+      status: "pending",
+      statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido creado por asistente" }],
+      destinationAddress: user.address || "Sin dirección",
+      reference: "Creado por asistente",
+      agency: "Asistente"
+    });
+
+    session.cartItems = [];
+    return `Listo, creé un pedido real para ti con ${cartItems.length} producto(s). El número de pedido es ${payment.documento} y ya quedó registrado con estado ${delivery.status}.`;
   }
 
   return null;
