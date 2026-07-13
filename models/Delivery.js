@@ -22,10 +22,20 @@ const DeliverySchema = new mongoose.Schema({
     status: {
         type: String,
         enum: {
-            values: ["pending", "ready_for_pickup", "shipped", "delivered", "returned"],
+            values: ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled", "returned"],
             message: "{VALUE} no es un estado de entrega válido."
         },
         default: "pending"
+    },
+    statusHistory: {
+        type: [
+            {
+                status: String,
+                timestamp: Date,
+                note: String
+            }
+        ],
+        default: []
     },
     returnCost: {
         type: Number,

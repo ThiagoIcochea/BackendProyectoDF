@@ -1,6 +1,10 @@
 const Payment = require("../models/Payment");
 const Product = require("../models/Product");
+const Claim = require("../models/Claim");
+const Delivery = require("../models/Delivery");
 const { getGroqApiKey, callGroq, parseGroqJson } = require("../utils/groqClient");
+const { canCreateClaim } = require("./orderFlow");
+const { evaluateClaimDescription } = require("./claimReview");
 
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || process.env.REACT_APP_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://nendoshop.onrender.com");
 const PRODUCT_DETAIL_PATH = "/product";
@@ -223,6 +227,111 @@ const toPaymentFact = (payment) => ({
   total: payment.total || 0
 });
 
+const CLAIM_CATEGORY_ALIASES = {
+  demora: "delay",
+  delay: "delay",
+  incompleto: "incomplete",
+  incomplete: "incomplete",
+  danado: "damaged",
+  dañado: "damaged",
+  damaged: "damaged",
+  devolucion: "return",
+  devolución: "return",
+  return: "return",
+  cancelacion: "cancellation",
+  cancelación: "cancellation",
+  cancellation: "cancellation"
+};
+
+const statusLabel = (status) => ({
+  pending: "pendiente",
+  ready_for_pickup: "listo para recojo",
+  shipped: "enviado",
+  delivered: "entregado",
+  cancelled: "cancelado",
+  returned: "devuelto"
+}[status] || status || "pendiente");
+
+const findUserDeliveryById = async (userId, rawId) => {
+  if (!userId || !rawId) return null;
+  const id = String(rawId).replace(/^#/, "").trim();
+  const query = { user: userId };
+  if (/^[a-f0-9]{24}$/i.test(id)) {
+    query._id = id;
+    return Delivery.findOne(query).populate("paymentId").lean().catch(() => null);
+  }
+  const deliveries = await Delivery.find({ user: userId }).populate("paymentId").lean().catch(() => []);
+  return deliveries.find((delivery) => String(delivery._id).slice(-6).toLowerCase() === id.toLowerCase()) || null;
+};
+
+const buildOrderSummary = (delivery) => {
+  const payment = delivery.paymentId || {};
+  const products = (payment.productos || []).map((item) => `${item.name} x${item.quantity}`).join(", ");
+  const history = (delivery.statusHistory || []).map((entry) => `${statusLabel(entry.status)} (${entry.timestamp ? new Date(entry.timestamp).toLocaleDateString("es-PE") : "sin fecha"})`).join(" > ");
+  return `Pedido ${String(delivery._id).slice(-6).toUpperCase()}: ${statusLabel(delivery.status)}. Productos: ${products || "sin productos registrados"}. Tracking: ${history || statusLabel(delivery.status)}.`;
+};
+
+const handleAutomationCommand = async (text, session) => {
+  const userId = session?.userId;
+  const normalized = String(text || "").trim();
+  if (!/^\/|^(ver|consultar|crear|generar|cancelar|cambiar)/i.test(normalized)) return null;
+
+  if (!userId) {
+    return "Para ejecutar acciones necesito que escribas desde tu cuenta iniciada. Puedo orientarte, pero no modificar ni consultar pedidos sin identificarte.";
+  }
+
+  if (/^\/?(mis[-\s]?pedidos|ordenes|órdenes)$/i.test(normalized)) {
+    const deliveries = await Delivery.find({ user: userId }).populate("paymentId").sort({ createdAt: -1 }).limit(5).lean().catch(() => []);
+    if (!deliveries.length) return "No encuentro pedidos asociados a tu cuenta. Si acabas de pagar, espera unos segundos y vuelve a consultar.";
+    return deliveries.map(buildOrderSummary).join("\n");
+  }
+
+  const orderMatch = normalized.match(/(?:pedido|orden|detalle|estado)\s+#?([a-f0-9]{24}|[a-z0-9]{6})/i);
+  if (orderMatch && /ver|consultar|detalle|estado|pedido|orden/i.test(normalized)) {
+    const delivery = await findUserDeliveryById(userId, orderMatch[1]);
+    return delivery ? buildOrderSummary(delivery) : "No encontré ese pedido en tu cuenta. Revisa el ID corto o completo y lo intento de nuevo.";
+  }
+
+  const claimMatch = normalized.match(/(?:reclamo|reclamar)\s+#?([a-f0-9]{24}|[a-z0-9]{6})\s+([a-záéíóúñ]+)\s+(.+)/i);
+  if (claimMatch) {
+    const delivery = await findUserDeliveryById(userId, claimMatch[1]);
+    if (!delivery) return "No encontré ese pedido en tu cuenta. No crearé reclamos sobre pedidos que no te pertenecen.";
+    const category = CLAIM_CATEGORY_ALIASES[String(claimMatch[2]).toLowerCase()] || "";
+    if (!category) return "La categoría no coincide. Usa demora, incompleto, dañado, devolución o cancelación.";
+    const description = claimMatch[3].trim();
+    const existingClaims = await Claim.find({ delivery: delivery._id, status: "pending" }).lean().catch(() => []);
+    const decision = canCreateClaim({
+      category,
+      currentStatus: delivery.status,
+      deadlineDate: delivery.estimatedDate || delivery.paymentId?.fecha,
+      existingClaims
+    }, new Date());
+    if (!decision.allowed) return decision.reason;
+    const review = await evaluateClaimDescription(description, category);
+    if (!review.validClaim) return review.reason;
+    await Claim.create({
+      delivery: delivery._id,
+      payment: delivery.paymentId?._id,
+      user: userId,
+      category,
+      description,
+      resolution: "pending",
+      status: "pending"
+    });
+    return "Listo, registré tu reclamo y quedó pendiente de revisión por administración. Puedes seguir el avance desde Mis Pedidos.";
+  }
+
+  if (/contrase|password/i.test(normalized)) {
+    return "Puedo guiarte con el cambio de contraseña, pero no te pediré tu contraseña actual por chat. Ve a Perfil > Seguridad, solicita el cambio y cuando el sistema pida MFA ingresa el código recibido en tu correo.";
+  }
+
+  if (/crear\s+pedido|comprar|ordenar/i.test(normalized)) {
+    return "Puedo ayudarte a encontrar productos y revisar stock. Para crear un pedido real usa el carrito y el checkout, porque ahí se valida pago, dirección y comprobante sin exponer datos sensibles en el chat.";
+  }
+
+  return null;
+};
+
 const CLASSIFICATION_PROMPT = (text) => `Eres un clasificador para el chatbot de atención al cliente de NendoShop (tienda de figuras Nendoroid). Analiza el mensaje del cliente y responde ÚNICAMENTE con un JSON válido, sin texto adicional, con esta forma exacta:
 
 {
@@ -374,7 +483,7 @@ const fallbackTemplate = ({ customerName, stage, facts }) => {
     return `No encontré ese número de pedido, ${customerName}. ¿Puedes confirmarlo?`;
   }
   if (stage === "survey_intro") {
-    return `Gracias por contactarnos, ${customerName}. ¿Podrías calificar nuestra atención del 1 al 5 para ayudarnos a mejorar?`;
+    return `Gracias por contactarnos, ${customerName}. Antes de decir adiós, ¿podrías calificar nuestra atención del 1 al 5 para ayudarnos a mejorar?`;
   }
   if (stage === "closing") {
     return `Gracias por tu respuesta, ${customerName}. Cerramos esta conversación con satisfacción; escríbenos cuando lo necesites.`;
@@ -490,6 +599,19 @@ const getSupportBotReply = async (input, session) => {
   }
 
   if (session.step === "welcome") {
+    const welcomeClassification = fallbackClassification(text);
+    const welcomeImmediateReply = getImmediateSupportReply({
+      text,
+      customerName,
+      intent: welcomeClassification.intent
+    });
+    if (welcomeImmediateReply) {
+      session.step = "active";
+      pushHistory(session, "user", text);
+      pushHistory(session, "bot", welcomeImmediateReply);
+      return welcomeImmediateReply;
+    }
+
     session.step = "active";
     const reply = await composeReply({ customerName, intent: "saludo", stage: "welcome", session, facts: null });
     pushHistory(session, "bot", reply);
@@ -505,6 +627,12 @@ const getSupportBotReply = async (input, session) => {
   }
 
   pushHistory(session, "user", text);
+
+  const automationReply = await handleAutomationCommand(text, session);
+  if (automationReply) {
+    pushHistory(session, "bot", automationReply);
+    return automationReply;
+  }
 
   const quickClassification = fallbackClassification(text);
   const immediateReply = getImmediateSupportReply({

@@ -1,5 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const crypto = require("crypto");
+const { Resend } = require("resend");
 const router = express.Router();
 
 const Delivery = require("../models/Delivery");
@@ -10,6 +12,84 @@ const isAdmin = require("../middlewares/isAdmin");
 const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
 const User = require("../models/User");
 const { ensureDeliveryCode } = require("../utils/deliveryCode");
+const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
+
+const OTP_EXPIRE_MS = 5 * 60 * 1000;
+const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+
+const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const generateTempToken = () => crypto.randomBytes(24).toString("hex");
+
+const sendActionMfaCode = async (user, code) => {
+    if (!resendClient) {
+        console.log(`[MFA cancelacion] Codigo para ${user.email}: ${code}`);
+        return { sentBy: "console" };
+    }
+
+    const from = (process.env.RESEND_FROM_EMAIL || "Nendoshop <notificaciones@freecodingvibes.shop>").trim();
+    await resendClient.emails.send({
+        from,
+        to: user.email,
+        subject: "Codigo para cancelar tu pedido - Nendoshop",
+        text: `Hola ${user.name || user.email}, tu codigo para cancelar el pedido es: ${code}. Expira en 5 minutos.`,
+        html: `<p>Hola ${user.name || user.email},</p><p>Tu codigo para cancelar el pedido es:</p><h2>${code}</h2><p>Expira en 5 minutos. Si no solicitaste esta accion, ignora este mensaje.</p>`
+    });
+    return { sentBy: "email" };
+};
+
+const issueActionMfa = async (user) => {
+    const code = generateCode();
+    const tempToken = generateTempToken();
+    const now = new Date();
+    await sendActionMfaCode(user, code);
+
+    user.twoFactorCode = code;
+    user.twoFactorMethod = "email";
+    user.twoFactorTempToken = tempToken;
+    user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
+    user.twoFactorLastSentAt = now;
+    user.twoFactorAttempts = 0;
+    user.twoFactorBlockedUntil = null;
+    await user.save();
+
+    return tempToken;
+};
+
+const verifyActionMfa = async (user, tempToken, code) => {
+    const now = new Date();
+    const valid = user.twoFactorTempToken === tempToken &&
+        Boolean(user.twoFactorCode) &&
+        user.twoFactorCode === String(code || "").trim() &&
+        user.twoFactorExpires &&
+        user.twoFactorExpires >= now;
+
+    if (!valid) return false;
+
+    user.twoFactorCode = null;
+    user.twoFactorExpires = null;
+    user.twoFactorTempToken = null;
+    user.twoFactorAttempts = 0;
+    user.twoFactorBlockedUntil = null;
+    user.twoFactorLastSentAt = null;
+    user.twoFactorMethod = null;
+    await user.save();
+    return true;
+};
+
+const restockPaymentProducts = async (paymentId, session = null) => {
+    const paymentQuery = Payment.findById(paymentId);
+    const payment = session ? await paymentQuery.session(session) : await paymentQuery;
+    if (!payment?.productos?.length) return;
+
+    for (const item of payment.productos) {
+        const update = Product.findOneAndUpdate(
+            { name: item.name },
+            { $inc: { stock: Number(item.quantity || 0) } }
+        );
+        if (session) await update.session(session);
+        else await update;
+    }
+};
 
 /** 
  * @route   POST /api/deliveries
@@ -64,6 +144,7 @@ router.post("/", verifyToken, async (req, res) => {
                 paymentId,
                 deliveryType,
                 status: "pending",
+                statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido registrado" }],
                 user: req.user.id
             });
         } else {
@@ -200,21 +281,17 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
         if (cancellationReason !== undefined) delivery.cancellationReason = cancellationReason;
 
         if (status !== undefined) {
-            const validStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled"];
+            const validStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled", "returned"];
             if (!validStatuses.includes(status)) {
                 return res.status(400).json({ message: "Estado de entrega inválido." });
             }
+            const previousStatus = delivery.status;
             delivery.status = status;
-            if (status === 'cancelled' && delivery.paymentId) {
-                const payment = await Payment.findById(delivery.paymentId);
-                if (payment?.productos?.length) {
-                    for (const item of payment.productos) {
-                        await Product.findOneAndUpdate(
-                            { name: item.name },
-                            { $inc: { stock: Number(item.quantity || 0) } }
-                        );
-                    }
-                }
+            syncStatusHistory(delivery, status, {
+                note: cancellationReason || `Estado actualizado por administracion: ${status}`
+            });
+            if (status === 'cancelled' && previousStatus !== 'cancelled' && delivery.paymentId) {
+                await restockPaymentProducts(delivery.paymentId);
             }
         }
 
@@ -238,8 +315,8 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
  */
 router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
     try {
-        const { status, deliveryCode } = req.body;
-        const allowedStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled"];
+        const { status, deliveryCode, mfaCode, tempToken } = req.body;
+        const allowedStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled", "returned"];
 
         if (!status || !allowedStatuses.includes(status)) {
             return res.status(400).json({
@@ -251,6 +328,27 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
 
         if (!delivery) {
             return res.status(404).json({ message: "Entrega no encontrada." });
+        }
+
+        if (status === "cancelled") {
+            const adminUser = await User.findById(req.user.id);
+            if (!adminUser) {
+                return res.status(404).json({ message: "Administrador no encontrado." });
+            }
+
+            if (!mfaCode || !tempToken) {
+                const newTempToken = await issueActionMfa(adminUser);
+                return res.status(202).json({
+                    twoFactorRequired: true,
+                    tempToken: newTempToken,
+                    message: "Te enviamos un codigo MFA para confirmar la cancelacion del pedido."
+                });
+            }
+
+            const mfaOk = await verifyActionMfa(adminUser, tempToken, mfaCode);
+            if (!mfaOk) {
+                return res.status(401).json({ message: "Codigo MFA incorrecto o expirado." });
+            }
         }
 
         if (status === "ready_for_pickup") {
@@ -271,9 +369,14 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             }
         }
 
+        const previousStatus = delivery.status;
         delivery.status = status;
+        syncStatusHistory(delivery, status, { note: `Estado logistico actualizado: ${status}` });
         if (deliveryCode !== undefined && status === "delivered") {
             delivery.deliveryCode = deliveryCode;
+        }
+        if (status === "cancelled" && previousStatus !== "cancelled" && delivery.paymentId) {
+            await restockPaymentProducts(delivery.paymentId);
         }
         await delivery.save();
 
@@ -332,6 +435,7 @@ router.put("/my-orders/:id/return", verifyToken, async (req, res) => {
 
             delivery.status = "returned";
             delivery.returnCost = returnCost;
+            syncStatusHistory(delivery, "returned", { note: "Devolucion procesada" });
             await delivery.save({ session });
 
             const payment = await Payment.findById(delivery.paymentId).session(session);
@@ -397,6 +501,109 @@ router.put("/my-orders/:id/return", verifyToken, async (req, res) => {
             success: false,
             error: error.message
         });
+    } finally {
+        session.endSession();
+    }
+});
+
+router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
+    try {
+        const delivery = await Delivery.findById(req.params.id);
+        if (!delivery || String(delivery.user) !== req.user.id) {
+            return res.status(404).json({ message: "Pedido no encontrado." });
+        }
+
+        if (!["pending", "ready_for_pickup"].includes(delivery.status)) {
+            return res.status(400).json({ message: "Solo puedes cancelar pedidos pendientes o listos para recojo. Si ya fue enviado, genera un reclamo." });
+        }
+
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ message: "Usuario no encontrado." });
+        }
+
+        const code = generateCode();
+        const tempToken = generateTempToken();
+        const now = new Date();
+        await sendActionMfaCode(user, code);
+
+        user.twoFactorCode = code;
+        user.twoFactorMethod = "email";
+        user.twoFactorTempToken = tempToken;
+        user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
+        user.twoFactorLastSentAt = now;
+        user.twoFactorAttempts = 0;
+        user.twoFactorBlockedUntil = null;
+        await user.save();
+
+        return res.json({
+            twoFactorRequired: true,
+            tempToken,
+            message: "Te enviamos un codigo de verificacion para confirmar la cancelacion."
+        });
+    } catch (error) {
+        return res.status(500).json({ message: error.message });
+    }
+});
+
+router.post("/my-orders/:id/cancel/confirm", verifyToken, async (req, res) => {
+    const session = await mongoose.startSession();
+    try {
+        const { code, tempToken, reason } = req.body;
+        if (!code || !tempToken) {
+            return res.status(400).json({ message: "Codigo MFA y token temporal son obligatorios." });
+        }
+
+        let responsePayload = null;
+        await session.withTransaction(async () => {
+            const user = await User.findById(req.user.id).session(session);
+            if (!user) {
+                const err = new Error("Usuario no encontrado.");
+                err.status = 404;
+                throw err;
+            }
+
+            const now = new Date();
+            if (user.twoFactorTempToken !== tempToken || !user.twoFactorCode || user.twoFactorCode !== String(code).trim() || !user.twoFactorExpires || user.twoFactorExpires < now) {
+                const err = new Error("Codigo MFA incorrecto o expirado.");
+                err.status = 401;
+                throw err;
+            }
+
+            const delivery = await Delivery.findById(req.params.id).session(session);
+            if (!delivery || String(delivery.user) !== req.user.id) {
+                const err = new Error("Pedido no encontrado.");
+                err.status = 404;
+                throw err;
+            }
+
+            if (!["pending", "ready_for_pickup"].includes(delivery.status)) {
+                const err = new Error("Este pedido ya no puede cancelarse directamente. Genera un reclamo para que soporte lo revise.");
+                err.status = 400;
+                throw err;
+            }
+
+            delivery.status = "cancelled";
+            delivery.cancellationReason = reason || "Cancelado por el cliente con MFA";
+            syncStatusHistory(delivery, "cancelled", { note: delivery.cancellationReason });
+            await delivery.save({ session });
+            await restockPaymentProducts(delivery.paymentId, session);
+
+            user.twoFactorCode = null;
+            user.twoFactorExpires = null;
+            user.twoFactorTempToken = null;
+            user.twoFactorAttempts = 0;
+            user.twoFactorBlockedUntil = null;
+            user.twoFactorLastSentAt = null;
+            user.twoFactorMethod = null;
+            await user.save({ session });
+
+            responsePayload = { message: "Pedido cancelado correctamente.", delivery };
+        });
+
+        return res.json(responsePayload);
+    } catch (error) {
+        return res.status(error.status || 500).json({ message: error.message });
     } finally {
         session.endSession();
     }

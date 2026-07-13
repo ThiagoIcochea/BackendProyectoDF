@@ -11,6 +11,7 @@ const isAdmin = require('../middlewares/isAdmin');
 const { canCreateClaim } = require('../utils/orderFlow');
 const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
+const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
 
 router.get('/my-claims', verifyToken, async (req, res) => {
   try {
@@ -108,6 +109,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
     if (delivery) {
       if (newDeliveryStatus) {
         delivery.status = newDeliveryStatus;
+        syncStatusHistory(delivery, newDeliveryStatus, { note: resolution || `Reclamo ${claim.status}` });
       }
       if (cancellationReason) {
         delivery.cancellationReason = cancellationReason;

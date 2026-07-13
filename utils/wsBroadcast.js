@@ -1,6 +1,6 @@
 const ChatMessage = require("../models/ChatMessage");
 const User = require("../models/User");
-const { buildSupportBotReply, createSupportSession, moderateCommunityMessage } = require("./supportBot");
+const { buildSupportBotReply, createSupportSession, moderateCommunityMessage, checkTextSafety } = require("./supportBot");
 const { recordLog } = require("../utils/logger");
 
 let wss = null;
@@ -162,6 +162,7 @@ const handleClientMessage = async (socket, message) => {
 
     if (roomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
+      session.userId = userId || socket.userId || session.userId || null;
       socket.supportSession = session;
       
       const replyText = await buildSupportBotReply(normalizedText, session);
@@ -201,5 +202,6 @@ module.exports = {
   handleClientDisconnect,
   broadcastPurchaseAlert,
   broadcastCommentUpdate,
-  moderateCommunityMessage
+  moderateCommunityMessage,
+  checkTextSafety
 };

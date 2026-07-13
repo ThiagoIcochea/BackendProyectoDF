@@ -9,6 +9,7 @@ const verifyToken = require("../middlewares/verifyToken");
 const wsBroadcast = require("../utils/wsBroadcast");
 const { createPayPalOrder, capturePayPalOrder } = require("../utils/paypalHelper");
 const { calculateDeliveryDeadline } = require("../utils/orderFlow");
+const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
 
 /**
  * @route   POST /api/paypal/create-order
@@ -92,6 +93,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             user: req.user.id,
             deliveryType: payment.deliveryType || "shipping",
             status: "pending",
+            statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido registrado" }],
             destinationAddress: payment.deliveryType === "shipping" 
                 ? (payment.direccion_entrega || "Pendiente de registro") 
                 : undefined,

@@ -11,6 +11,7 @@ const User = require("../models/User");
 const wsBroadcast = require("../utils/wsBroadcast");
 const { calculateDeliveryDeadline, buildSlaMessage } = require("../utils/orderFlow");
 const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
+const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
 
 router.post("/", verifyToken, async (req, res) => {
     try {
@@ -40,6 +41,7 @@ router.post("/", verifyToken, async (req, res) => {
             user: req.user?.id,
             deliveryType: payment.deliveryType || "shipping",
             status: "pending",
+            statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido registrado" }],
             destinationAddress: payment.deliveryType === "shipping" 
                 ? (payment.direccion_entrega || "Pendiente de registro") 
                 : undefined,
