@@ -1,4 +1,5 @@
 const ChatMessage = require("../models/ChatMessage");
+const ChatRoom = require("../models/ChatRoom");
 const User = require("../models/User");
 const { buildSupportBotReply, createSupportSession, moderateCommunityMessage, checkTextSafety } = require("./supportBot");
 const { recordLog } = require("../utils/logger");
@@ -60,7 +61,22 @@ const removeUserFromRoom = (socket) => {
   broadcastRoomUsers(socket.roomKey);
 };
 
+const ensureChatRoom = async (roomKey, fallbackName = "Chat") => {
+  if (!roomKey) return null;
+  let room = await ChatRoom.findOne({ key: roomKey });
+  if (!room) {
+    room = await ChatRoom.create({
+      key: roomKey,
+      name: fallbackName,
+      description: "Sala de chat persistida",
+      type: roomKey.startsWith("support") ? "support" : "community"
+    });
+  }
+  return room;
+};
+
 const persistMessage = async ({ roomKey, userId, username, text, profileImg, role = "user", meta = {} }) => {
+  await ensureChatRoom(roomKey, roomKey?.startsWith("support") ? "Soporte" : "Comunidad");
   const message = await ChatMessage.create({
     roomKey,
     userId,
