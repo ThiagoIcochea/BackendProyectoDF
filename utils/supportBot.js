@@ -251,7 +251,9 @@ const parseClaimRequest = (text) => {
 
 const parseCheckoutIntent = (text) => {
   const normalized = String(text || "").trim();
-  if (!/\b(crear|crea|generar|genera|hacer|haz|armar|confirmar|comprar|ordenar)\b/i.test(normalized) || !/\b(pedido|orden|compra)\b/i.test(normalized)) {
+  const hasAction = /\b(crear|crea|generar|genera|generame|hacer|haz|armar|confirmar|comprar|ordenar)\b/i.test(normalized);
+  const hasOrderTerm = /\b(pedido|orden|compra|comprar)\b/i.test(normalized);
+  if (!hasAction || !hasOrderTerm) {
     return null;
   }
   const deliveryType = parseDeliveryPreference(normalized);
@@ -768,6 +770,38 @@ const handleCheckoutRequest = async (text, session) => {
   const checkoutIntent = parseCheckoutIntent(normalized);
   if (!checkoutIntent) return null;
 
+  if (/^(si|sí|si gracias|ok|okay|listo|confirmo|acepto)$/i.test(normalized)) {
+    if (session.pendingMfaAction?.type === "checkout" && session.pendingMfaAction.status === "waiting_for_confirmation") {
+      const user = await User.findById(session.userId).catch(() => null);
+      if (!user) return "No encuentro tu cuenta para iniciar el pedido.";
+      const paymentPayload = {
+        cliente: user.name || user.email,
+        documento: `BOT-${Date.now().toString().slice(-6)}`,
+        productos: session.cartItems || [],
+        total: (session.cartItems || []).reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0),
+        deliveryType: session.pendingMfaAction.deliveryType,
+        direccion_entrega: session.pendingMfaAction.deliveryType === "shipping" ? session.pendingMfaAction.address || "Pendiente" : undefined,
+        referencia: session.pendingMfaAction.deliveryType === "shipping" ? session.pendingMfaAction.reference || "Pendiente" : undefined,
+        metodo_envio: session.pendingMfaAction.deliveryType === "shipping" ? "delivery" : "recojo",
+        estado: "Pagado"
+      };
+      const payment = await Payment.create(paymentPayload);
+      await Delivery.create({
+        paymentId: payment._id,
+        user: session.userId,
+        deliveryType: session.pendingMfaAction.deliveryType,
+        status: "pending",
+        statusHistory: [{ status: "pending", timestamp: new Date(), note: "Pedido creado por asistente" }],
+        destinationAddress: session.pendingMfaAction.deliveryType === "shipping" ? session.pendingMfaAction.address || "Pendiente" : undefined,
+        reference: session.pendingMfaAction.deliveryType === "shipping" ? session.pendingMfaAction.reference || "Pendiente" : undefined,
+        agency: session.pendingMfaAction.deliveryType === "shipping" ? session.pendingMfaAction.agency || "Pendiente" : undefined
+      });
+      session.pendingMfaAction = null;
+      session.cartItems = [];
+      return `Listo, generé el pedido real para ti. El número de pedido es ${payment.documento}.`;
+    }
+  }
+
   const user = await User.findById(session.userId).catch(() => null);
   if (!user) return "No encuentro tu cuenta para iniciar el pedido.";
 
@@ -818,18 +852,43 @@ const handleClaimRequest = async (text, session) => {
   if (!session?.userId) return null;
   const normalized = String(text || "").trim();
   const parsed = parseClaimRequest(normalized);
-  if (!parsed) return null;
+
+  if (!parsed) {
+    if (/(reclamo|reclamar)/i.test(normalized)) {
+      const orderNumber = extractOrderNumber(normalized) || (session.pendingClaim?.orderNumber ? session.pendingClaim.orderNumber : null);
+      if (orderNumber) {
+        const user = await User.findById(session.userId).catch(() => null);
+        if (!user) return "No encuentro tu cuenta para generar un reclamo.";
+        const delivery = await Delivery.findOne({ user: session.userId, paymentId: { $exists: true } }).populate("paymentId").lean().catch(() => null);
+        if (!delivery) return "No encontré un pedido asociado a tu cuenta para registrar el reclamo.";
+        const claim = await Claim.create({ delivery: delivery._id, payment: delivery.paymentId?._id, user: session.userId, category: "delay", description: `Reclamo generado por el asistente para ${orderNumber}`, resolution: "pending", status: "pending" });
+        session.pendingClaim = null;
+        return `Listo, registré el reclamo para el pedido ${orderNumber}. Quedó pendiente de revisión.`;
+      }
+      session.pendingClaim = { orderNumber: null, step: "waiting_for_order" };
+      return "Claro. Dime el número de pedido para registrar el reclamo.";
+    }
+    return null;
+  }
 
   const user = await User.findById(session.userId).catch(() => null);
-  if (!user) return "No encuentro tu cuenta para generar un reclamo.";
+  if (!user) {
+    if (/(reclamo|reclamar)/i.test(normalized)) {
+      session.pendingClaim = { orderNumber: null, step: "waiting_for_order" };
+      return "Claro. Dime el número de pedido para registrar el reclamo.";
+    }
+    return "No encuentro tu cuenta para generar un reclamo.";
+  }
 
-  const delivery = parsed.orderNumber ? await Delivery.findOne({ user: session.userId, paymentId: { $exists: true } }).populate("paymentId").lean().catch(() => null) : null;
+  const delivery = parsed.orderNumber ? await findUserDeliveryById(session.userId, parsed.orderNumber) : null;
   if (!delivery) {
-    return "No encontré un pedido asociado a tu cuenta para registrar el reclamo. Si me compartes el número de pedido exacto, te ayudo mejor.";
+    session.pendingClaim = { orderNumber: parsed.orderNumber, step: "waiting_for_order" };
+    return `No encontré un pedido con el número ${parsed.orderNumber}. Si me compartes el número exacto o el código de pedido, te ayudo mejor.`;
   }
 
   const category = parsed.category;
   const description = parsed.description || "Reclamo generado por el asistente";
+  session.pendingClaim = null;
   const claim = await Claim.create({
     delivery: delivery._id,
     payment: delivery.paymentId?._id,

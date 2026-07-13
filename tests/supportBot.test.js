@@ -195,10 +195,21 @@ test('parseClaimRequest handles short claim creation requests', () => {
   assert.equal(parsed.category, 'delay');
 });
 
-test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
+test('parseCheckoutIntent recognizes natural checkout requests', () => {
   const parsed = parseCheckoutIntent('genera el pedido');
   assert.ok(parsed);
   assert.equal(parsed.kind, 'checkout');
+
+  const parsedNatural = parseCheckoutIntent('generame mi pedido');
+  assert.ok(parsedNatural);
+  assert.equal(parsedNatural.kind, 'checkout');
+});
+
+test('buildSupportBotReply asks for the order number when the user requests a claim', async () => {
+  const session = createSupportSession();
+  session.userId = 'user-123';
+  const reply = await buildSupportBotReply('generame el reclamo', session);
+  assert.match(reply, /número de pedido|pedido/i);
 });
 
 test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
