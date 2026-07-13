@@ -189,6 +189,18 @@ test('parseClaimRequest handles synonyms and natural wording', () => {
   assert.match(parsed.description, /problema|incompleto/i);
 });
 
+test('parseClaimRequest handles short claim creation requests', () => {
+  const parsed = parseClaimRequest('genera el reclamo');
+  assert.ok(parsed);
+  assert.equal(parsed.category, 'delay');
+});
+
+test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
+  const parsed = parseCheckoutIntent('genera el pedido');
+  assert.ok(parsed);
+  assert.equal(parsed.kind, 'checkout');
+});
+
 test('parseCheckoutIntent detects a checkout request and delivery preference', () => {
   const parsed = parseCheckoutIntent('crea un pedido con envío a casa');
   assert.equal(parsed.kind, 'checkout');

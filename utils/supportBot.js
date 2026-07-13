@@ -212,8 +212,8 @@ const isClaimIntent = (text) => {
   if (/\b(hola|buenos|buenas|gracias|adios|adiós|estoy bien|todo bien|como estas|como estás)\b/i.test(normalized)) return false;
   const hasClaimKeyword = /\b(reclamo|reclamar|queja|quejas|problema|problemas|incidente|fallo|fallar|falló|dañado|dañada|incompleto|incompleta|retraso|demora|demorado|cancelacion|cancelación|devolucion|devolución|reembolso|refund|error|no lleg[óo]|lleg[óo]|lleg[ao]|entreg[ao]|roto|rota|perdido|perdida)\b/i.test(lowered);
   const hasOrderContext = /\b(pedido|orden|compra|producto|envio|envío|entrega|delivery|articulo|artículo)\b/i.test(lowered);
-  const hasAction = /\b(hacer|crear|abrir|generar|registrar|presentar|quiero|necesito|tengo|me|mi)\b/i.test(lowered);
-  return hasClaimKeyword || (hasOrderContext && hasAction);
+  const hasAction = /\b(hacer|crear|abrir|generar|registrar|presentar|quiero|necesito|tengo|me|mi|genera|genera el|crea|crea el|haz|hace)\b/i.test(lowered);
+  return hasClaimKeyword || (hasOrderContext && hasAction) || /\b(genera|genera el|crea|crea el|haz|hace)\s+(el\s+)?(reclamo|reclamar)\b/i.test(lowered);
 };
 
 const inferClaimCategory = (text) => {
@@ -240,8 +240,8 @@ const inferClaimCategory = (text) => {
 const parseClaimRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized || !isClaimIntent(normalized)) return null;
-  const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero)[^0-9]*(\d{2,})/i);
-  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo)\s+/gi, " ").trim();
+  const orderMatch = normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero|numero)[^0-9a-z]*(\d{2,}|[a-z0-9]{3,})/i);
+  const description = normalized.replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|pedido|orden|compra|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace)\s+/gi, " ").trim();
   return {
     orderNumber: orderMatch?.[1] || null,
     category: inferClaimCategory(normalized),
@@ -251,7 +251,7 @@ const parseClaimRequest = (text) => {
 
 const parseCheckoutIntent = (text) => {
   const normalized = String(text || "").trim();
-  if (!/\b(crear|crea|generar|hacer|armar|confirmar|comprar|ordenar)\b/i.test(normalized) || !/\b(pedido|orden|compra)\b/i.test(normalized)) {
+  if (!/\b(crear|crea|generar|genera|hacer|haz|armar|confirmar|comprar|ordenar)\b/i.test(normalized) || !/\b(pedido|orden|compra)\b/i.test(normalized)) {
     return null;
   }
   const deliveryType = parseDeliveryPreference(normalized);
