@@ -13,6 +13,67 @@ const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
 const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
 
+const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const generateTempToken = () => require('crypto').randomBytes(24).toString('hex');
+
+const OTP_EXPIRE_MS = 5 * 60 * 1000;
+const resendClient = process.env.RESEND_API_KEY ? new (require('resend').Resend)(process.env.RESEND_API_KEY) : null;
+
+const sendActionMfaCode = async (user, code, method = 'email') => {
+  const selectedMethod = String(method || 'email').toLowerCase();
+  if (selectedMethod === 'console' || !resendClient) {
+    console.log(`[MFA reclamo] Código para ${user.email}: ${code}`);
+    return { sentBy: 'console' };
+  }
+
+  const from = (process.env.RESEND_FROM_EMAIL || 'Nendoshop <notificaciones@freecodingvibes.shop>').trim();
+  await resendClient.emails.send({
+    from,
+    to: user.email,
+    subject: 'Código para confirmar la cancelación del pedido - Nendoshop',
+    text: `Hola ${user.name || user.email}, tu código para confirmar la cancelación es: ${code}. Expira en 5 minutos.`,
+    html: `<p>Hola ${user.name || user.email},</p><p>Tu código para confirmar la cancelación es:</p><h2>${code}</h2><p>Expira en 5 minutos. Si no solicitaste esta acción, ignora este mensaje.</p>`
+  });
+  return { sentBy: 'email' };
+};
+
+const issueActionMfa = async (user, method = 'email') => {
+  const code = generateCode();
+  const tempToken = generateTempToken();
+  const now = new Date();
+  const selectedMethod = String(method || 'email').toLowerCase();
+  await sendActionMfaCode(user, code, selectedMethod);
+
+  user.twoFactorCode = code;
+  user.twoFactorMethod = selectedMethod === 'console' ? 'console' : 'email';
+  user.twoFactorTempToken = tempToken;
+  user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
+  user.twoFactorLastSentAt = now;
+  user.twoFactorAttempts = 0;
+  user.twoFactorBlockedUntil = null;
+  await user.save();
+
+  return tempToken;
+};
+
+const verifyActionMfa = async (user, tempToken, code) => {
+  const now = new Date();
+  const valid = user.twoFactorTempToken === tempToken && Boolean(user.twoFactorCode) &&
+    user.twoFactorCode === String(code || '').trim() && user.twoFactorExpires && user.twoFactorExpires >= now;
+
+  if (!valid) return false;
+
+  user.twoFactorCode = null;
+  user.twoFactorExpires = null;
+  user.twoFactorTempToken = null;
+  user.twoFactorAttempts = 0;
+  user.twoFactorBlockedUntil = null;
+  user.twoFactorLastSentAt = null;
+  user.twoFactorMethod = null;
+  await user.save();
+  return true;
+};
+
 router.get('/my-claims', verifyToken, async (req, res) => {
   try {
     const claims = await Claim.find({ user: req.user.id }).sort({ createdAt: -1 });
@@ -94,7 +155,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
   const session = await mongoose.startSession();
   try {
     const { id } = req.params;
-    const { status, resolution, newDeliveryStatus, cancellationReason, deliveryCode } = req.body;
+    const { status, resolution, newDeliveryStatus, cancellationReason, deliveryCode, mfaCode, tempToken, method } = req.body;
 
     const claim = await Claim.findById(id).populate('delivery').session(session);
     if (!claim) {
@@ -107,7 +168,37 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
 
     const delivery = await Delivery.findById(claim.delivery._id).session(session);
     if (delivery) {
+      if (newDeliveryStatus === 'cancelled') {
+        const adminUser = await User.findById(req.user.id).session(session);
+        if (!adminUser) {
+          return res.status(404).json({ message: 'Administrador no encontrado.' });
+        }
+
+        if (!mfaCode || !tempToken) {
+          const newTempToken = await issueActionMfa(adminUser, method);
+          return res.status(202).json({
+            twoFactorRequired: true,
+            tempToken: newTempToken,
+            message: 'Te enviamos un código MFA para confirmar la cancelación del pedido desde el reclamo.'
+          });
+        }
+
+        const mfaOk = await verifyActionMfa(adminUser, tempToken, mfaCode);
+        if (!mfaOk) {
+          return res.status(401).json({ message: 'Código MFA incorrecto o expirado.' });
+        }
+      }
+
       if (newDeliveryStatus) {
+        const currentStatus = delivery.status;
+        const allowed = ['pending','ready_for_pickup','shipped','delivered','cancelled','returned'];
+        if (!allowed.includes(newDeliveryStatus)) {
+          return res.status(400).json({ message: 'Estado de entrega inválido.' });
+        }
+        const isAllowedTransition = newDeliveryStatus === currentStatus || ['cancelled','returned'].includes(newDeliveryStatus) && ['pending','ready_for_pickup','shipped','delivered'].includes(currentStatus);
+        if (!isAllowedTransition) {
+          return res.status(400).json({ message: 'El reclamo solo puede mover el pedido a un estado válido y permitido por la logística.' });
+        }
         delivery.status = newDeliveryStatus;
         syncStatusHistory(delivery, newDeliveryStatus, { note: resolution || `Reclamo ${claim.status}` });
       }

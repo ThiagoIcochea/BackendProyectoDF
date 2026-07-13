@@ -13,6 +13,7 @@ const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
 const User = require("../models/User");
 const { ensureDeliveryCode } = require("../utils/deliveryCode");
 const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
+const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require("../utils/deliveryStatusFlow");
 
 const OTP_EXPIRE_MS = 5 * 60 * 1000;
 const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -20,8 +21,10 @@ const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_
 const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
 const generateTempToken = () => crypto.randomBytes(24).toString("hex");
 
-const sendActionMfaCode = async (user, code) => {
-    if (!resendClient) {
+const sendActionMfaCode = async (user, code, method = "email") => {
+    const selectedMethod = String(method || "email").toLowerCase();
+
+    if (selectedMethod === "console" || !resendClient) {
         console.log(`[MFA cancelacion] Codigo para ${user.email}: ${code}`);
         return { sentBy: "console" };
     }
@@ -37,14 +40,15 @@ const sendActionMfaCode = async (user, code) => {
     return { sentBy: "email" };
 };
 
-const issueActionMfa = async (user) => {
+const issueActionMfa = async (user, method = "email") => {
     const code = generateCode();
     const tempToken = generateTempToken();
     const now = new Date();
-    await sendActionMfaCode(user, code);
+    const selectedMethod = String(method || "email").toLowerCase();
+    await sendActionMfaCode(user, code, selectedMethod);
 
     user.twoFactorCode = code;
-    user.twoFactorMethod = "email";
+    user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
     user.twoFactorTempToken = tempToken;
     user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
     user.twoFactorLastSentAt = now;
@@ -315,7 +319,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
  */
 router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
     try {
-        const { status, deliveryCode, mfaCode, tempToken } = req.body;
+        const { status, deliveryCode, mfaCode, tempToken, method } = req.body;
         const allowedStatuses = ["pending", "ready_for_pickup", "shipped", "delivered", "cancelled", "returned"];
 
         if (!status || !allowedStatuses.includes(status)) {
@@ -330,6 +334,12 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             return res.status(404).json({ message: "Entrega no encontrada." });
         }
 
+        if (!isValidStatusTransition(delivery.status, status)) {
+            return res.status(400).json({
+                message: `No puedes avanzar desde '${getStatusLabel(delivery.status)}' hacia '${getStatusLabel(status)}'. Los cambios permitidos son: ${getAllowedNextStatuses(delivery.status).map(getStatusLabel).join(", ") || "ninguno"}.`
+            });
+        }
+
         if (status === "cancelled") {
             const adminUser = await User.findById(req.user.id);
             if (!adminUser) {
@@ -337,7 +347,7 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             }
 
             if (!mfaCode || !tempToken) {
-                const newTempToken = await issueActionMfa(adminUser);
+                const newTempToken = await issueActionMfa(adminUser, method);
                 return res.status(202).json({
                     twoFactorRequired: true,
                     tempToken: newTempToken,
@@ -522,13 +532,14 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
             return res.status(404).json({ message: "Usuario no encontrado." });
         }
 
+        const selectedMethod = String(req.body?.method || "email").toLowerCase();
         const code = generateCode();
         const tempToken = generateTempToken();
         const now = new Date();
-        await sendActionMfaCode(user, code);
+        await sendActionMfaCode(user, code, selectedMethod);
 
         user.twoFactorCode = code;
-        user.twoFactorMethod = "email";
+        user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
         user.twoFactorTempToken = tempToken;
         user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
         user.twoFactorLastSentAt = now;
@@ -549,7 +560,7 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
 router.post("/my-orders/:id/cancel/confirm", verifyToken, async (req, res) => {
     const session = await mongoose.startSession();
     try {
-        const { code, tempToken, reason } = req.body;
+        const { code, tempToken, reason, method } = req.body;
         if (!code || !tempToken) {
             return res.status(400).json({ message: "Codigo MFA y token temporal son obligatorios." });
         }
