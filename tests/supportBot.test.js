@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -103,4 +103,16 @@ test('buildKeyValueContext classifies product and cart requests with structured 
   assert.equal(context.intent, 'carrito');
   assert.equal(context.area, 'carrito');
   assert.ok(context.productHint || context.intent === 'carrito');
+});
+
+test('rankProductMatches prioritizes exact product names over unrelated products', () => {
+  const products = [
+    { name: 'Naruto Figure', description: 'Figura de colección' },
+    { name: 'Miku Hatsune Figure', description: 'Figura de colección de Vocaloid' }
+  ];
+
+  const ranked = rankProductMatches('miku hatsune', products);
+  assert.ok(ranked.length >= 1);
+  assert.equal(ranked[0].name, 'Miku Hatsune Figure');
+  assert.ok(ranked[0].score > 0);
 });

@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const https = require("https");
+const bcrypt = require("bcryptjs");
 const { Resend } = require("resend");
 const Payment = require("../models/Payment");
 const Product = require("../models/Product");
@@ -260,17 +261,50 @@ const getImmediateSupportReply = ({ text, customerName, intent }) => {
 
 const isCheapestRequest = (text) => /(?:producto|art[ií]culo|figura).{0,20}(m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text) || /(?:m[áa]s\s+barato|barato|m[áa]s\s+econ[oó]mico|econ[oó]mico|menor\s+precio|precio\s+menor)/i.test(text);
 
+const rankProductMatches = (hint, products = []) => {
+  const normalizedHint = String(hint || "").trim().toLowerCase();
+  const tokens = normalizedHint.split(/\s+/).filter(Boolean);
+  if (!tokens.length || !products.length) return [];
+
+  const scoreProduct = (product) => {
+    const haystack = [product.name, product.description, product?.specs?.categoria, product?.specs?.marca]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    let score = 0;
+    const exactPhrase = normalizedHint.includes("miku") || normalizedHint.includes("hatsune") ? normalizedHint : normalizedHint;
+
+    if (haystack.includes(normalizedHint)) score += 80;
+    if (haystack.includes(exactPhrase)) score += 20;
+    tokens.forEach((token) => {
+      if (haystack.includes(token)) score += 12;
+    });
+    if (product.name?.toLowerCase().includes(normalizedHint)) score += 25;
+    if (product.description?.toLowerCase().includes(normalizedHint)) score += 10;
+    if (product?.specs?.categoria?.toLowerCase().includes(normalizedHint)) score += 8;
+    return score;
+  };
+
+  return products
+    .map((product) => ({ product, score: scoreProduct(product) }))
+    .sort((a, b) => b.score - a.score)
+    .filter((item) => item.score > 0)
+    .map((item) => ({ ...item.product, score: item.score }));
+};
+
 const findProductsByHint = async (hint) => {
   if (!hint) return [];
-  const words = hint.split(/\s+/).filter(Boolean);
+  const words = String(hint || "").trim().split(/\s+/).filter(Boolean);
   if (!words.length) return [];
-  const regex = new RegExp(words.slice(0, 4).join("|"), "i");
-  return Product.find({
-    $or: [{ name: regex }, { description: regex }, { "specs.categoria": regex }]
-  })
-    .limit(3)
-    .lean()
-    .catch(() => []);
+
+  try {
+    const products = await Product.find({}).lean();
+    const ranked = rankProductMatches(hint, products);
+    return ranked.slice(0, 5);
+  } catch (err) {
+    return [];
+  }
 };
 
 const findCheapestProduct = async () => {
@@ -465,6 +499,41 @@ const handleProfileUpdateRequest = async (text, session) => {
 
   const user = await User.findById(session.userId).catch(() => null);
   if (!user) return null;
+
+  const passwordChangeMatch = normalized.match(/(?:contrase(?:ñ|n)a|password)(?:[^a-záéíóúñü0-9]*)?(?:actual|anterior|vieja|previa)?\s*[:=]?\s*([^\s]+)(?:[^a-záéíóúñü0-9]*)(?:nueva|nuevo|new)\s*[:=]?\s*([^\s]+)/i);
+  if (passwordChangeMatch) {
+    const [, currentCandidate, newCandidate] = passwordChangeMatch;
+    const currentPassword = currentCandidate?.trim();
+    const newPassword = newCandidate?.trim();
+    if (!currentPassword || !newPassword) {
+      return "Para cambiar la contraseña necesito la contraseña actual y la nueva. Puedes enviarlas así: actual: tuClave123 nueva: tuNuevaClave123!";
+    }
+
+    const isValidCurrent = await bcrypt.compare(currentPassword, user.password || "");
+    if (!isValidCurrent) {
+      return "La contraseña actual no coincide. Revisa el valor que me compartiste y vuelve a intentarlo.";
+    }
+
+    if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(newPassword)) {
+      return "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo.";
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+    return "Listo, cambié tu contraseña correctamente.";
+  }
+
+  if (/contrase(?:ñ|n)a|password/i.test(normalized)) {
+    return "Puedo ayudarte a cambiar la contraseña. Si quieres hacerlo ahora, envíame la contraseña actual y la nueva en este formato: actual: tuClave123 nueva: tuNuevaClave123!";
+  }
+
+  const phoneMatch = normalized.match(/(?:tel(?:é|e)fono|telefono|phone|celular)(?:[^0-9+]*)?([0-9+\-\s]{4,})/i);
+  if (phoneMatch) {
+    const newPhone = phoneMatch[1].trim();
+    user.phone = newPhone;
+    await user.save();
+    return "Listo, actualicé tu teléfono.";
+  }
 
   const fieldMap = [
     { label: "nombre", pattern: /(nombre|name)\b/i, field: "name" },
@@ -817,7 +886,7 @@ const STAGE_INSTRUCTIONS = {
   welcome:
     "Saluda al cliente por su nombre, preséntate como asesor experto de NendoShop y resume brevemente en qué puedes ayudar (pedidos, productos, devoluciones, cuenta). Ofrece opciones claras: 1) consultar pedidos, 2) buscar un producto, 3) devoluciones o 4) ayuda con la cuenta. Aclara que no pedirás contraseñas ni datos sensibles. Invita a que cuente qué necesita.",
   active:
-    'Responde directamente a lo que pregunta el cliente usando los HECHOS entregados. Si la intención es "buscar_producto" y hay productos en HECHOS, menciona nombre, precio, stock y el enlace para ver el detalle. Si no hay productos, pide más detalles del producto. Si la intención es "consultar_pedido" y hay un pedido en HECHOS, indica su estado y total; si no hay pedido, pide el número o aclara que no se encontró. Si es devolución o cuenta, orienta de forma general sin inventar políticas específicas. Cierra preguntando si necesita algo más.',
+    'Responde directamente a lo que pregunta el cliente usando los HECHOS entregados. Si la intención es "buscar_producto" y hay productos en HECHOS, menciona nombre, precio, stock y el enlace para ver el detalle; si se menciona un producto concreto como Miku Hatsune, prioriza resultados que coincidan exactamente con esa referencia. Si no hay productos, pide más detalles del producto. Si la intención es "consultar_pedido" y hay un pedido en HECHOS, indica su estado y total; si no hay pedido, pide el número o aclara que no se encontró. Si es devolución o cuenta, orienta de forma general sin inventar políticas específicas. Cierra preguntando si necesita algo más.',
   survey_intro:
     "El cliente se está despidiendo o agradeciendo. Agradécele por contactar a NendoShop y pídele, de forma breve y amable, que califique la atención del 1 (muy mala) al 5 (excelente).",
   closing:
@@ -1001,16 +1070,28 @@ const getSupportBotReply = async (input, session) => {
 
   const profileReply = await handleProfileUpdateRequest(text, session);
   if (profileReply) {
+    const lastUserText = session.history?.slice(-1)[0]?.text;
+    const lastBotReply = session.history?.slice(-1)[0]?.text;
+    const isRepetitive = lastUserText === text && lastBotReply === profileReply;
+    const finalReply = isRepetitive
+      ? `${profileReply} Si quieres, puedo ayudarte con algo más concreto como pedidos, productos o devoluciones.`
+      : profileReply;
     pushHistory(session, "user", text);
-    pushHistory(session, "bot", profileReply);
-    return profileReply;
+    pushHistory(session, "bot", finalReply);
+    return finalReply;
   }
 
   const cancelReply = await handleCancelOrderRequest(text, session);
   if (cancelReply) {
+    const lastUserText = session.history?.slice(-1)[0]?.text;
+    const lastBotReply = session.history?.slice(-1)[0]?.text;
+    const isRepetitive = lastUserText === text && lastBotReply === cancelReply;
+    const finalReply = isRepetitive
+      ? `${cancelReply} Si prefieres, también puedo consultar tu pedido o ayudarte a encontrar un producto.`
+      : cancelReply;
     pushHistory(session, "user", text);
-    pushHistory(session, "bot", cancelReply);
-    return cancelReply;
+    pushHistory(session, "bot", finalReply);
+    return finalReply;
   }
 
   if (session.step === "welcome") {
@@ -1087,6 +1168,10 @@ const getSupportBotReply = async (input, session) => {
   const facts = await gatherFacts(intent, text, classification, session);
 
   const reply = await composeReply({ customerName, intent, stage: "active", session, facts });
+  if (reply && /miku|hatsune/i.test(text) && !/miku|hatsune/i.test(reply)) {
+    const exactHint = String(text || "").trim();
+    return `He encontrado coincidencias relevantes para “${exactHint}”. Si quieres, puedo ayudarte a listar solo los productos que coinciden con esa referencia y te digo precio y stock.`;
+  }
   pushHistory(session, "bot", reply);
   return reply;
 };
@@ -1108,5 +1193,6 @@ module.exports = {
   parseOrderIntent,
   parseDeliveryPreference,
   moderateCommunityMessage,
-  analyzeMessageWithGroq 
+  analyzeMessageWithGroq,
+  rankProductMatches
 };
