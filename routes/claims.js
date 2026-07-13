@@ -9,74 +9,12 @@ const User = require('../models/User');
 const verifyToken = require('../middlewares/verifyToken');
 const isAdmin = require('../middlewares/isAdmin');
 const { canCreateClaim } = require('../utils/orderFlow');
-const { sendOrderUpdateEmail, sendVerificationCodeEmail } = require('../utils/emailNotifications');
+const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
 const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
 const { recordLog } = require('../utils/logger');
 const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require('../utils/deliveryStatusFlow');
-
-const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
-const generateTempToken = () => require('crypto').randomBytes(24).toString('hex');
-
-const OTP_EXPIRE_MS = 5 * 60 * 1000;
-const resendClient = process.env.RESEND_API_KEY ? new (require('resend').Resend)(process.env.RESEND_API_KEY) : null;
-
-const sendActionMfaCode = async (user, code, method = 'email') => {
-  const selectedMethod = String(method || 'email').toLowerCase();
-  if (selectedMethod === 'console') {
-    console.log(`[MFA reclamo] Código para ${user.email}: ${code}`);
-    return { sentBy: 'console' };
-  }
-
-  const result = await sendVerificationCodeEmail(user, code, {
-    subject: 'Código para confirmar la cancelación del pedido - Nendoshop',
-    title: 'Confirmación de cancelación',
-    description: 'Tu código para confirmar la cancelación del pedido es:'
-  });
-
-  if (!result.sent) {
-    return { sentBy: 'email', error: true, reason: result.reason, message: result.message };
-  }
-
-  return { sentBy: 'email' };
-};
-
-const issueActionMfa = async (user, method = 'email') => {
-  const code = generateCode();
-  const tempToken = generateTempToken();
-  const now = new Date();
-  const selectedMethod = String(method || 'email').toLowerCase();
-  await sendActionMfaCode(user, code, selectedMethod);
-
-  user.twoFactorCode = code;
-  user.twoFactorMethod = selectedMethod === 'console' ? 'console' : 'email';
-  user.twoFactorTempToken = tempToken;
-  user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
-  user.twoFactorLastSentAt = now;
-  user.twoFactorAttempts = 0;
-  user.twoFactorBlockedUntil = null;
-  await user.save();
-
-  return tempToken;
-};
-
-const verifyActionMfa = async (user, tempToken, code) => {
-  const now = new Date();
-  const valid = user.twoFactorTempToken === tempToken && Boolean(user.twoFactorCode) &&
-    user.twoFactorCode === String(code || '').trim() && user.twoFactorExpires && user.twoFactorExpires >= now;
-
-  if (!valid) return false;
-
-  user.twoFactorCode = null;
-  user.twoFactorExpires = null;
-  user.twoFactorTempToken = null;
-  user.twoFactorAttempts = 0;
-  user.twoFactorBlockedUntil = null;
-  user.twoFactorLastSentAt = null;
-  user.twoFactorMethod = null;
-  await user.save();
-  return true;
-};
+const { issueActionMfa, verifyActionMfa } = require('../utils/twoFactor');
 
 router.get('/my-claims', verifyToken, async (req, res) => {
   try {
@@ -188,10 +126,14 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         if (!mfaCode || !tempToken) {
           const normalizedMethod = String(method || 'email').toLowerCase();
           const safeMethod = ['email', 'sms', 'call', 'whatsapp', 'console'].includes(normalizedMethod) ? normalizedMethod : 'email';
-          const newTempToken = await issueActionMfa(adminUser, safeMethod);
+          const mfaResult = await issueActionMfa(adminUser, safeMethod, {
+            subject: 'Código para confirmar la cancelación del pedido - Nendoshop',
+            title: 'Confirmación de cancelación',
+            description: 'Tu código para confirmar la cancelación del pedido es:'
+          });
           return res.status(202).json({
             twoFactorRequired: true,
-            tempToken: newTempToken,
+            tempToken: mfaResult.tempToken,
             method: safeMethod,
             message: 'Te enviamos un código MFA para confirmar la cancelación del pedido desde el reclamo.'
           });

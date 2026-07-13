@@ -9,79 +9,13 @@ const Payment = require("../models/Payment");
 const Product = require("../models/Product");
 const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
-const { sendOrderUpdateEmail, sendVerificationCodeEmail } = require("../utils/emailNotifications");
+const { sendOrderUpdateEmail } = require("../utils/emailNotifications");
 const User = require("../models/User");
 const { ensureDeliveryCode } = require("../utils/deliveryCode");
 const { syncStatusHistory } = require("../utils/deliveryStatusHistory");
 const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require("../utils/deliveryStatusFlow");
 const { recordLog } = require("../utils/logger");
-
-const OTP_EXPIRE_MS = 5 * 60 * 1000;
-const resendClient = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-
-const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
-const generateTempToken = () => crypto.randomBytes(24).toString("hex");
-
-const sendActionMfaCode = async (user, code, method = "email") => {
-    const selectedMethod = String(method || "email").toLowerCase();
-
-    if (selectedMethod === "console") {
-        console.log(`[MFA cancelacion] Codigo para ${user.email}: ${code}`);
-        return { sentBy: "console" };
-    }
-
-    const result = await sendVerificationCodeEmail(user, code, {
-        subject: "Código para cancelar tu pedido - Nendoshop",
-        title: "Confirmación de cancelación",
-        description: "Tu código para confirmar la cancelación del pedido es:"
-    });
-
-    if (!result.sent) {
-        return { sentBy: "email", error: true, reason: result.reason, message: result.message };
-    }
-
-    return { sentBy: "email" };
-};
-
-const issueActionMfa = async (user, method = "email") => {
-    const code = generateCode();
-    const tempToken = generateTempToken();
-    const now = new Date();
-    const selectedMethod = String(method || "email").toLowerCase();
-    await sendActionMfaCode(user, code, selectedMethod);
-
-    user.twoFactorCode = code;
-    user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
-    user.twoFactorTempToken = tempToken;
-    user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
-    user.twoFactorLastSentAt = now;
-    user.twoFactorAttempts = 0;
-    user.twoFactorBlockedUntil = null;
-    await user.save();
-
-    return tempToken;
-};
-
-const verifyActionMfa = async (user, tempToken, code) => {
-    const now = new Date();
-    const valid = user.twoFactorTempToken === tempToken &&
-        Boolean(user.twoFactorCode) &&
-        user.twoFactorCode === String(code || "").trim() &&
-        user.twoFactorExpires &&
-        user.twoFactorExpires >= now;
-
-    if (!valid) return false;
-
-    user.twoFactorCode = null;
-    user.twoFactorExpires = null;
-    user.twoFactorTempToken = null;
-    user.twoFactorAttempts = 0;
-    user.twoFactorBlockedUntil = null;
-    user.twoFactorLastSentAt = null;
-    user.twoFactorMethod = null;
-    await user.save();
-    return true;
-};
+const { issueActionMfa, verifyActionMfa } = require("../utils/twoFactor");
 
 const restockPaymentProducts = async (paymentId, session = null) => {
     const paymentQuery = Payment.findById(paymentId);
@@ -551,22 +485,14 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
 
         const selectedMethod = String(req.body?.method || "email").toLowerCase();
         const safeMethod = ['email', 'console', 'sms', 'call', 'whatsapp'].includes(selectedMethod) ? selectedMethod : 'email';
-        const code = generateCode();
-        const tempToken = generateTempToken();
-        const now = new Date();
-        const emailResult = await sendActionMfaCode(user, code, safeMethod);
-        if (emailResult?.error) {
-            return res.status(502).json({ message: emailResult.message || "No se pudo enviar el código de verificación." });
+        const mfaResult = await issueActionMfa(user, safeMethod, {
+            subject: "Código para cancelar tu pedido - Nendoshop",
+            title: "Confirmación de cancelación",
+            description: "Tu código para confirmar la cancelación del pedido es:"
+        });
+        if (mfaResult?.error) {
+            return res.status(502).json({ message: mfaResult.message || "No se pudo enviar el código de verificación." });
         }
-
-        user.twoFactorCode = code;
-        user.twoFactorMethod = safeMethod === "console" ? "console" : safeMethod;
-        user.twoFactorTempToken = tempToken;
-        user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
-        user.twoFactorLastSentAt = now;
-        user.twoFactorAttempts = 0;
-        user.twoFactorBlockedUntil = null;
-        await user.save();
 
         await recordLog({
             req,
@@ -579,7 +505,7 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
 
         return res.json({
             twoFactorRequired: true,
-            tempToken,
+            tempToken: mfaResult.tempToken,
             method: safeMethod,
             message: "Te enviamos un código de verificación para confirmar la cancelación."
         });
@@ -605,8 +531,8 @@ router.post("/my-orders/:id/cancel/confirm", verifyToken, async (req, res) => {
                 throw err;
             }
 
-            const now = new Date();
-            if (user.twoFactorTempToken !== tempToken || !user.twoFactorCode || user.twoFactorCode !== String(code).trim() || !user.twoFactorExpires || user.twoFactorExpires < now) {
+            const mfaOk = await verifyActionMfa(user, tempToken, code);
+            if (!mfaOk) {
                 const err = new Error("Codigo MFA incorrecto o expirado.");
                 err.status = 401;
                 throw err;
@@ -630,15 +556,6 @@ router.post("/my-orders/:id/cancel/confirm", verifyToken, async (req, res) => {
             syncStatusHistory(delivery, "cancelled", { note: delivery.cancellationReason });
             await delivery.save({ session });
             await restockPaymentProducts(delivery.paymentId, session);
-
-            user.twoFactorCode = null;
-            user.twoFactorExpires = null;
-            user.twoFactorTempToken = null;
-            user.twoFactorAttempts = 0;
-            user.twoFactorBlockedUntil = null;
-            user.twoFactorLastSentAt = null;
-            user.twoFactorMethod = null;
-            await user.save({ session });
 
             await recordLog({
                 req,

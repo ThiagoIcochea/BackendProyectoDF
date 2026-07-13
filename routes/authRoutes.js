@@ -37,8 +37,7 @@ const pendingRegistrations = new Map();
 const pendingPasswordChanges = new Map();
 const pendingProfileUpdates = new Map();
 
-const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
-const generateTempToken = () => crypto.randomBytes(24).toString("hex");
+const { issueActionMfa, verifyActionMfa, generateCode, generateTempToken, normalizeMfaMethod } = require("../utils/twoFactor");
 const normalizeEmail = (value) => (value || "").trim().toLowerCase();
 const getResendFromAddress = () => {
   const raw = (process.env.RESEND_FROM_EMAIL || "").trim();
@@ -69,7 +68,7 @@ const generateEmailHtml = (name, code) => {
 };
 
 const sendTwoFactorCode = async (user, method, code) => {
-  const sendMethod = method || "email";
+  const sendMethod = normalizeMfaMethod(method || "email");
 
   if (sendMethod === "email") {
     const result = await sendVerificationCodeEmail(user, code, {
