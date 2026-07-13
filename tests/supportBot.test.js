@@ -81,3 +81,15 @@ test('buildSupportBotReply clarifies scope for unrelated questions', async () =>
   assert.match(reply, /mi función/i);
   assert.match(reply, /no es mi finalidad/i);
 });
+
+test('buildSupportBotReply answers expensive-product requests directly', async () => {
+  const session = createSupportSession();
+  const reply = await buildSupportBotReply('dime el producto más caro', session);
+  assert.match(reply, /caro|costoso|precio/i);
+});
+
+test('buildSupportBotReply handles cart requests directly', async () => {
+  const session = createSupportSession();
+  const reply = await buildSupportBotReply('agrega un producto al carrito', session);
+  assert.match(reply, /carrito/i);
+});

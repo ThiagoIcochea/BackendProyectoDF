@@ -8,6 +8,17 @@ const { evaluateClaimDescription } = require("./claimReview");
 
 const FRONTEND_BASE_URL = process.env.FRONTEND_URL || process.env.REACT_APP_FRONTEND_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://nendoshop.onrender.com");
 const PRODUCT_DETAIL_PATH = "/product";
+const ACTION_ROUTE_MAP = {
+  product_search: "/api/products/search",
+  product_detail: "/api/products/:id",
+  product_most_expensive: "/api/products?sort=price_desc",
+  cart_add: "/frontend/cart/add",
+  my_orders: "/api/deliveries/my-orders",
+  cancel_order: "/api/deliveries/my-orders/:id/cancel/request",
+  claim_create: "/api/claims",
+  admin_delivery_status: "/api/deliveries/:id/status",
+  admin_claim_resolution: "/api/claims/:id/resolve"
+};
 const buildProductLink = (id) => {
   const base = String(FRONTEND_BASE_URL || "https://nendoshop.onrender.com").replace(/\/$/, "");
   return `${base}/#/product/${id}`;
@@ -230,6 +241,15 @@ const findCheapestProduct = async () => {
   }
 };
 
+const findMostExpensiveProduct = async () => {
+  try {
+    return await Product.findOne({}).sort({ price: -1, stock: -1 }).lean();
+  } catch (err) {
+    console.error("No se pudo consultar el producto más caro:", err.message);
+    return null;
+  }
+};
+
 const toProductFact = (product) => ({
   nombre: product.name,
   precio: product.price || 0,
@@ -288,7 +308,30 @@ const buildOrderSummary = (delivery) => {
   const history = (delivery.statusHistory || []).map((entry) => `${statusLabel(entry.status)} (${entry.timestamp ? new Date(entry.timestamp).toLocaleDateString("es-PE") : "sin fecha"})`).join(" > ");
   return `Pedido ${String(delivery._id).slice(-6).toUpperCase()}: ${statusLabel(delivery.status)}. Productos: ${products || "sin productos registrados"}. Tracking: ${history || statusLabel(delivery.status)}.`;
 };
+const resolveActionRequest = async (text) => {
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
 
+  if (/(producto|figura|art[ií]culo|articulo).{0,20}(m[áa]s\s+caro|m[áa]s\s+costoso|mayor\s+precio|precio\s+mayor)/i.test(normalized) || /(?:m[áa]s\s+caro|m[áa]s\s+costoso|mayor\s+precio|precio\s+mayor)/i.test(normalized)) {
+    const expensiveProduct = await findMostExpensiveProduct();
+    if (!expensiveProduct) return "No tengo productos registrados en este momento para comparar precios.";
+    return `El producto más caro que tengo registrado es "${expensiveProduct.name}" con precio S/. ${expensiveProduct.price}. Ruta interna: ${ACTION_ROUTE_MAP.product_most_expensive}. Puedes revisar el detalle aquí: ${buildProductLink(expensiveProduct._id)}`;
+  }
+
+  if (/(agregar|añadir|sumar).*(carrito|cart)/i.test(normalized) || /(carrito|cart)/i.test(normalized)) {
+    const hint = extractProductHint(normalized);
+    if (hint) {
+      const products = await findProductsByHint(hint);
+      const product = products[0];
+      if (product) {
+        return `Preparé una acción de carrito para "${product.name}". Ruta interna: ${ACTION_ROUTE_MAP.cart_add}. Puedes abrir su detalle aquí: ${buildProductLink(product._id)}`;
+      }
+    }
+    return `Puedo ayudarte con el carrito. Ruta interna: ${ACTION_ROUTE_MAP.cart_add}. Si me dices el producto, te preparo la acción con el enlace directo.`;
+  }
+
+  return null;
+};
 const handleAutomationCommand = async (text, session) => {
   const userId = session?.userId;
   const normalized = String(text || "").trim();
@@ -338,6 +381,9 @@ const handleAutomationCommand = async (text, session) => {
     });
     return "Listo, registré tu reclamo y quedó pendiente de revisión por administración. Puedes seguir el avance desde Mis Pedidos.";
   }
+
+  const actionReply = await resolveActionRequest(normalized);
+  if (actionReply) return actionReply;
 
   if (/contrase|password/i.test(normalized)) {
     return "Puedo guiarte con el cambio de contraseña, pero no te pediré tu contraseña actual por chat. Ve a Perfil > Seguridad, solicita el cambio y cuando el sistema pida MFA ingresa el código recibido en tu correo.";
@@ -616,6 +662,13 @@ const getSupportBotReply = async (input, session) => {
     return safeBlockedReply(customerName);
   }
 
+  const actionReply = await resolveActionRequest(text);
+  if (actionReply) {
+    pushHistory(session, "user", text);
+    pushHistory(session, "bot", actionReply);
+    return actionReply;
+  }
+
   if (session.step === "welcome") {
     const welcomeClassification = fallbackClassification(text);
     const welcomeImmediateReply = getImmediateSupportReply({
@@ -698,6 +751,7 @@ const buildSupportBotReply = getSupportBotReply;
 
 module.exports = {
   SUPPORT_INTRO,
+  ACTION_ROUTE_MAP,
   createSupportSession,
   getSupportBotReply,
   buildSupportBotReply,
