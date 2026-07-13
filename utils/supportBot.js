@@ -186,6 +186,33 @@ const extractProductHint = (text) => {
   return null;
 };
 
+const normalizeMfaMethod = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "email";
+  if (["correo", "email", "mail"].includes(raw)) return "email";
+  if (["sms", "mensaje", "texto", "whatsapp", "wa"].includes(raw)) return "whatsapp";
+  if (["llamada", "call", "telefono"].includes(raw)) return "call";
+  if (["console", "consola"].includes(raw)) return "console";
+  return raw;
+};
+
+const parseProfileChangeRequest = (text) => {
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+
+  const phoneMatch = normalized.match(/(?:tel(?:é|e)fono|telefono|phone|celular)[^0-9+]*([0-9+\-\s]{4,})/i);
+  if (phoneMatch) {
+    return { kind: "phone", newValue: phoneMatch[1].trim() };
+  }
+
+  const passwordMatch = normalized.match(/(?:contrase(?:ñ|n)a|password)[^\w]*?(?:a|al|nueva|nuevo)?[^\w]*([A-Za-z0-9!@#$%^&*()_+=\-]{4,})/i);
+  if (passwordMatch) {
+    return { kind: "password", newPassword: passwordMatch[1].trim() };
+  }
+
+  return null;
+};
+
 const buildKeyValueContext = (text) => {
   const lower = String(text || "").toLowerCase();
   const context = {};
@@ -500,39 +527,61 @@ const handleProfileUpdateRequest = async (text, session) => {
   const user = await User.findById(session.userId).catch(() => null);
   if (!user) return null;
 
-  const passwordChangeMatch = normalized.match(/(?:contrase(?:ñ|n)a|password)(?:[^a-záéíóúñü0-9]*)?(?:actual|anterior|vieja|previa)?\s*[:=]?\s*([^\s]+)(?:[^a-záéíóúñü0-9]*)(?:nueva|nuevo|new)\s*[:=]?\s*([^\s]+)/i);
-  if (passwordChangeMatch) {
-    const [, currentCandidate, newCandidate] = passwordChangeMatch;
-    const currentPassword = currentCandidate?.trim();
-    const newPassword = newCandidate?.trim();
-    if (!currentPassword || !newPassword) {
-      return "Para cambiar la contraseña necesito la contraseña actual y la nueva. Puedes enviarlas así: actual: tuClave123 nueva: tuNuevaClave123!";
+  const parsedUpdate = parseProfileChangeRequest(normalized);
+  if (parsedUpdate?.kind === "password") {
+    const pending = session.pendingMfaAction || null;
+    if (pending?.type === "password_change" && pending.status === "waiting_for_code") {
+      const code = normalized.match(/\b(\d{6})\b/);
+      if (!code) {
+        return "Te envié un código de verificación. Envíame los 6 dígitos para confirmar el cambio de contraseña.";
+      }
+      const ok = await verifyActionMfa(user, pending.tempToken, code[1]);
+      if (!ok) {
+        return "El código no es válido o ya expiró. Solicita uno nuevo para continuar.";
+      }
+      const newPassword = pending.newPassword;
+      user.password = await bcrypt.hash(newPassword, 10);
+      await user.save();
+      session.pendingMfaAction = null;
+      return "Listo, cambié tu contraseña correctamente y quedó verificada con MFA.";
     }
 
-    const isValidCurrent = await bcrypt.compare(currentPassword, user.password || "");
-    if (!isValidCurrent) {
-      return "La contraseña actual no coincide. Revisa el valor que me compartiste y vuelve a intentarlo.";
+    const newPassword = parsedUpdate.newPassword;
+    if (!newPassword) {
+      return "Puedo ayudarte a cambiar la contraseña. Compárteme la nueva contraseña y te pediré la verificación por correo antes de aplicarla.";
     }
-
     if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(newPassword)) {
       return "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo.";
     }
-
-    user.password = await bcrypt.hash(newPassword, 10);
-    await user.save();
-    return "Listo, cambié tu contraseña correctamente.";
+    const tempToken = await issueActionMfa(user, "email");
+    session.pendingMfaAction = { type: "password_change", status: "waiting_for_code", tempToken, newPassword };
+    return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de contraseña.";
   }
 
   if (/contrase(?:ñ|n)a|password/i.test(normalized)) {
-    return "Puedo ayudarte a cambiar la contraseña. Si quieres hacerlo ahora, envíame la contraseña actual y la nueva en este formato: actual: tuClave123 nueva: tuNuevaClave123!";
+    return "Puedo ayudarte a cambiar la contraseña. Solo haré el cambio al confirmar el código MFA que te envíe por correo.";
   }
 
-  const phoneMatch = normalized.match(/(?:tel(?:é|e)fono|telefono|phone|celular)(?:[^0-9+]*)?([0-9+\-\s]{4,})/i);
-  if (phoneMatch) {
-    const newPhone = phoneMatch[1].trim();
-    user.phone = newPhone;
-    await user.save();
-    return "Listo, actualicé tu teléfono.";
+  if (parsedUpdate?.kind === "phone") {
+    const pending = session.pendingMfaAction || null;
+    if (pending?.type === "phone_change" && pending.status === "waiting_for_code") {
+      const code = normalized.match(/\b(\d{6})\b/);
+      if (!code) {
+        return "Te envié un código de verificación. Envíame los 6 dígitos para confirmar el cambio de teléfono.";
+      }
+      const ok = await verifyActionMfa(user, pending.tempToken, code[1]);
+      if (!ok) {
+        return "El código no es válido o ya expiró. Solicita uno nuevo para continuar.";
+      }
+      user.phone = pending.newValue;
+      await user.save();
+      session.pendingMfaAction = null;
+      return "Listo, actualicé tu teléfono y quedó verificado con MFA.";
+    }
+
+    const tempToken = await issueActionMfa(user, "email");
+    session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken, newValue: parsedUpdate.newValue };
+    return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de teléfono.";
   }
 
   const fieldMap = [
@@ -567,13 +616,13 @@ const handleCancelOrderRequest = async (text, session) => {
 
   const existingPending = session.pendingMfaAction;
   if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_method") {
-    const method = /correo|email/i.test(normalized) ? "email" : /consola|console/i.test(normalized) ? "console" : null;
-    if (!method) {
-      return "Para confirmar la cancelación necesito el método de verificación: correo o consola.";
+    const method = normalizeMfaMethod(normalized);
+    if (!["email", "console", "sms", "call", "whatsapp"].includes(method)) {
+      return "Para confirmar la cancelación necesito el método de verificación: correo, SMS, llamada, WhatsApp o consola.";
     }
     const tempToken = await issueActionMfa(user, method);
     session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_code", deliveryId: existingPending.deliveryId, tempToken, method };
-    return `Te envié el código por ${method === "email" ? "correo" : "consola"}. Envíame el código de 6 dígitos para confirmar.`;
+    return `Te envié el código por ${method === "email" ? "correo" : method === "console" ? "consola" : method === "call" ? "llamada" : method === "whatsapp" ? "WhatsApp" : "SMS"}. Envíame el código de 6 dígitos para confirmar.`;
   }
 
   if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_code") {
@@ -607,7 +656,7 @@ const handleCancelOrderRequest = async (text, session) => {
   if (!delivery) return "No encuentro un pedido activo que pueda cancelar en este momento.";
 
   session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_method", deliveryId: delivery._id };
-  return "Para confirmar la cancelación necesito verificar tu identidad. ¿Prefieres que te envíe el código por correo o por consola?";
+  return "Para confirmar la cancelación necesito verificar tu identidad. Dime cómo prefieres recibir el código: correo, SMS, llamada, WhatsApp o consola.";
 };
 
 const CLAIM_CATEGORY_ALIASES = {
@@ -1194,5 +1243,7 @@ module.exports = {
   parseDeliveryPreference,
   moderateCommunityMessage,
   analyzeMessageWithGroq,
-  rankProductMatches
+  rankProductMatches,
+  parseProfileChangeRequest,
+  normalizeMfaMethod
 };

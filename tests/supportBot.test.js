@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches } = require('../utils/supportBot');
+const { buildSupportBotReply, createSupportSession, parseOrderIntent, parseDeliveryPreference, buildKeyValueContext, rankProductMatches, parseProfileChangeRequest, normalizeMfaMethod } = require('../utils/supportBot');
 const { checkTextSafety } = require('../utils/wsBroadcast');
 
 test('buildSupportBotReply returns a greeting with options', async () => {
@@ -115,4 +115,20 @@ test('rankProductMatches prioritizes exact product names over unrelated products
   assert.ok(ranked.length >= 1);
   assert.equal(ranked[0].name, 'Miku Hatsune Figure');
   assert.ok(ranked[0].score > 0);
+});
+
+test('parseProfileChangeRequest understands natural language for phone and password updates', () => {
+  const phoneChange = parseProfileChangeRequest('quiero cambiar mi teléfono por 987654321');
+  assert.equal(phoneChange.kind, 'phone');
+  assert.equal(phoneChange.newValue, '987654321');
+
+  const passwordChange = parseProfileChangeRequest('cambia mi contraseña a MiNuevaClave123!');
+  assert.equal(passwordChange.kind, 'password');
+  assert.equal(passwordChange.newPassword, 'MiNuevaClave123!');
+});
+
+test('normalizeMfaMethod accepts common aliases', () => {
+  assert.equal(normalizeMfaMethod('correo'), 'email');
+  assert.equal(normalizeMfaMethod('whatsapp'), 'whatsapp');
+  assert.equal(normalizeMfaMethod('llamada'), 'call');
 });

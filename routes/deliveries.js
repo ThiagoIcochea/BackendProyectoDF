@@ -351,11 +351,14 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             }
 
             if (!mfaCode || !tempToken) {
-                const newTempToken = await issueActionMfa(adminUser, method);
+                const normalizedMethod = String(method || "email").toLowerCase();
+                const safeMethod = ["email", "sms", "call", "whatsapp", "console"].includes(normalizedMethod) ? normalizedMethod : "email";
+                const newTempToken = await issueActionMfa(adminUser, safeMethod);
                 return res.status(202).json({
                     twoFactorRequired: true,
                     tempToken: newTempToken,
-                    message: "Te enviamos un codigo MFA para confirmar la cancelacion del pedido."
+                    method: safeMethod,
+                    message: "Te enviamos un código MFA para confirmar la cancelación del pedido."
                 });
             }
 
@@ -545,16 +548,14 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
         }
 
         const selectedMethod = String(req.body?.method || "email").toLowerCase();
+        const safeMethod = ['email', 'console', 'sms', 'call', 'whatsapp'].includes(selectedMethod) ? selectedMethod : 'email';
         const code = generateCode();
         const tempToken = generateTempToken();
         const now = new Date();
-        if (!['email', 'console', 'sms', 'call', 'whatsapp'].includes(selectedMethod)) {
-            return res.status(400).json({ message: "Método de verificación no soportado." });
-        }
-        await sendActionMfaCode(user, code, selectedMethod);
+        await sendActionMfaCode(user, code, safeMethod);
 
         user.twoFactorCode = code;
-        user.twoFactorMethod = selectedMethod === "console" ? "console" : "email";
+        user.twoFactorMethod = safeMethod === "console" ? "console" : safeMethod;
         user.twoFactorTempToken = tempToken;
         user.twoFactorExpires = new Date(now.getTime() + OTP_EXPIRE_MS);
         user.twoFactorLastSentAt = now;
@@ -574,7 +575,7 @@ router.post("/my-orders/:id/cancel/request", verifyToken, async (req, res) => {
         return res.json({
             twoFactorRequired: true,
             tempToken,
-            method: selectedMethod,
+            method: safeMethod,
             message: "Te enviamos un código de verificación para confirmar la cancelación."
         });
     } catch (error) {

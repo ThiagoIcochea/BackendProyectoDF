@@ -184,10 +184,13 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         }
 
         if (!mfaCode || !tempToken) {
-          const newTempToken = await issueActionMfa(adminUser, method);
+          const normalizedMethod = String(method || 'email').toLowerCase();
+          const safeMethod = ['email', 'sms', 'call', 'whatsapp', 'console'].includes(normalizedMethod) ? normalizedMethod : 'email';
+          const newTempToken = await issueActionMfa(adminUser, safeMethod);
           return res.status(202).json({
             twoFactorRequired: true,
             tempToken: newTempToken,
+            method: safeMethod,
             message: 'Te enviamos un código MFA para confirmar la cancelación del pedido desde el reclamo.'
           });
         }
