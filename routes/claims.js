@@ -131,6 +131,9 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
             title: 'Confirmación de cancelación',
             description: 'Tu código para confirmar la cancelación del pedido es:'
           });
+          if (mfaResult?.error) {
+            return res.status(502).json({ message: mfaResult.message || 'No se pudo enviar el código MFA para confirmar la cancelación.' });
+          }
           return res.status(202).json({
             twoFactorRequired: true,
             tempToken: mfaResult.tempToken,

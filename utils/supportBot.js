@@ -191,9 +191,9 @@ const normalizeMfaMethod = (value) => {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "email";
   if (["correo", "email", "mail"].includes(raw)) return "email";
-  if (["sms", "mensaje", "texto"].includes(raw)) return "sms";
-  if (["whatsapp", "wa"].includes(raw)) return "whatsapp";
-  if (["llamada", "call", "telefono", "telfono", "tel"].includes(raw)) return "call";
+  if (["sms", "mensaje", "texto", "smsm", "mensaje de texto"].includes(raw)) return "sms";
+  if (["whatsapp", "wa", "wsp", "wasap"].includes(raw)) return "whatsapp";
+  if (["llamada", "call", "llamar", "telefono", "telfono", "tel"].includes(raw)) return "call";
   if (["console", "consola"].includes(raw)) return "console";
   return raw;
 };
@@ -657,13 +657,15 @@ const handleCancelOrderRequest = async (text, session) => {
 
   const existingPending = session.pendingMfaAction;
   if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_method") {
-    const method = normalizeMfaMethod(normalized);
+    const explicitMethod = normalized.match(/\b(correo|email|sms|mensaje|whatsapp|wa|wsp|llamada|call|consola|console)\b/i);
+    const method = normalizeMfaMethod(explicitMethod ? explicitMethod[1] : normalized);
     if (!["email", "console", "sms", "call", "whatsapp"].includes(method)) {
       return "Para confirmar la cancelación necesito el método de verificación: correo, SMS, llamada, WhatsApp o consola.";
     }
-    const tempToken = await issueActionMfa(user, method);
-    session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_code", deliveryId: existingPending.deliveryId, tempToken, method };
-    return `Te envié el código por ${method === "email" ? "correo" : method === "console" ? "consola" : method === "call" ? "llamada" : method === "whatsapp" ? "WhatsApp" : "SMS"}. Envíame el código de 6 dígitos para confirmar.`;
+    const mfaResult = await issueActionMfa(user, method);
+    session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_code", deliveryId: existingPending.deliveryId, tempToken: mfaResult.tempToken, method };
+    const fallbackText = mfaResult.fallback ? ` El código para pruebas es ${mfaResult.code}.` : "";
+    return `Te envié el código por ${method === "email" ? "correo" : method === "console" ? "consola" : method === "call" ? "llamada" : method === "whatsapp" ? "WhatsApp" : "SMS"}.${fallbackText} Envíame el código de 6 dígitos para confirmar.`;
   }
 
   if (existingPending?.type === "cancel_order" && existingPending.status === "waiting_for_code") {
