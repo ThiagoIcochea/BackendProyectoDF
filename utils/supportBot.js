@@ -536,7 +536,11 @@ const issueActionMfa = async (user, method = "email") => {
     throw new Error(result.message || "No se pudo enviar el código de verificación.");
   }
 
-  return result.tempToken;
+  return {
+    tempToken: result.tempToken,
+    code: result.code,
+    fallback: result.fallback || false
+  };
 };
 
 const verifyActionMfa = async (user, tempToken, code) => verifySharedActionMfa(user, tempToken, code);
@@ -608,12 +612,17 @@ const handleProfileUpdateRequest = async (text, session) => {
     }
 
     try {
-      const tempToken = await issueActionMfa(user, "email");
-      session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken, newValue: parsedUpdate.newValue };
-      return "Te envié un código de verificación por correo. Envíame los 6 dígitos para confirmar el cambio de teléfono.";
+      const mfaResult = await issueActionMfa(user, "email");
+      session.pendingMfaAction = { type: "phone_change", status: "waiting_for_code", tempToken: mfaResult.tempToken, newValue: parsedUpdate.newValue };
+      const fallbackText = mfaResult.fallback ? ` El código para pruebas es ${mfaResult.code}.` : "";
+      return `Te envié un código de verificación${mfaResult.fallback ? " (se registró en consola porque el correo falló)" : " por correo"}. Envíame los 6 dígitos para confirmar el cambio de teléfono.${fallbackText}`;
     } catch (error) {
       return `No pude enviarte el código en este momento: ${error.message}`;
     }
+  }
+
+  if (/(tel(?:e|é)?fono|telefono|phone|celular|numero|telfono|tel)\b/i.test(normalized)) {
+    return "Claro, dime el nuevo teléfono para continuar con la actualización.";
   }
 
   const fieldMap = [

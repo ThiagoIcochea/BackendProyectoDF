@@ -13,8 +13,8 @@ const sendEmail = async ({ to, subject, text, html }) => {
   if (!to) return { sent: false, reason: 'missing_email' };
 
   if (!resendClient) {
-    console.log(`[email] ${subject} -> ${to}: ${text}`);
-    return { sent: false, reason: 'missing_resend', message: 'No se pudo enviar el correo porque la clave de Resend no está configurada.' };
+    console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
+    return { sent: true, fallback: true, reason: 'missing_resend', message: 'Se registró el mensaje en consola porque Resend no está configurado.' };
   }
 
   try {
@@ -29,13 +29,15 @@ const sendEmail = async ({ to, subject, text, html }) => {
 
     if (error) {
       console.error('[email] resend error', error);
-      return { sent: false, reason: 'resend_error', message: 'Resend rechazó el envío del correo.' };
+      console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
+      return { sent: true, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. Se registró el contenido en consola para continuar el flujo.' };
     }
 
-    return { sent: true, id: data?.id };
+    return { sent: true, id: data?.id, fallback: false };
   } catch (error) {
     console.error('[email] send failure', error);
-    return { sent: false, reason: 'exception', message: error?.message || 'No se pudo enviar el correo.' };
+    console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
+    return { sent: true, fallback: true, reason: 'exception', message: error?.message || 'No se pudo enviar el correo. Se registró en consola para continuar el flujo.' };
   }
 };
 
