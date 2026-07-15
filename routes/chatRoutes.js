@@ -23,11 +23,13 @@ router.get("/rooms", async (req, res) => {
 
 router.get("/rooms/:roomKey/messages", verifySupportRoomToken, async (req, res) => {
   try {
-    const { roomKey } = req.params;
+    let { roomKey } = req.params;
 
     if (roomKey.startsWith("support")) {
       const expectedRoomKey = `support_${req.user.id}`;
-      console.log("Roomkey:", roomKey," ExpectedRoomKey:",expectedRoomKey);
+      if (roomKey === "support") {
+        roomKey = expectedRoomKey;
+      }
       if (roomKey !== expectedRoomKey) {
         return res.status(403).json({ message: "No autorizado a ver este chat de soporte." });
       }

@@ -77,6 +77,14 @@ const ensureChatRoom = async (roomKey, fallbackName = "Chat") => {
   return room;
 };
 
+const normalizeRoomKeyForSocket = (socket, roomKey) => {
+  const safeRoomKey = String(roomKey || "").trim();
+  if (safeRoomKey === "support" && socket?.userId) {
+    return `support_${socket.userId}`;
+  }
+  return safeRoomKey;
+};
+
 const persistMessage = async ({ roomKey, userId, username, text, profileImg, role = "user", meta = {} }) => {
   await ensureChatRoom(roomKey, roomKey?.startsWith("support") ? "Soporte" : "Comunidad");
   const message = await ChatMessage.create({
@@ -110,7 +118,7 @@ const handleClientMessage = async (socket, message) => {
   const { roomKey, text, username, userId, profileImg } = message;
 
   if (type === "join") {
-    socket.roomKey = String(roomKey || socket.roomKey || "").trim();
+    socket.roomKey = normalizeRoomKeyForSocket(socket, roomKey || socket.roomKey);
     socket.username = socket.username || username || "Usuario";
     socket.userId = socket.userId || userId || socket.id;
     socket.profileImg = socket.profileImg || profileImg || "";
@@ -206,7 +214,7 @@ const handleClientMessage = async (socket, message) => {
   }
 
   if (type === "message") {
-    const safeRoomKey = String(roomKey || socket.roomKey || "").trim();
+    const safeRoomKey = normalizeRoomKeyForSocket(socket, roomKey || socket.roomKey);
     const normalizedText = String(text || "").trim();
     if (!safeRoomKey) {
       socket.send(JSON.stringify({ type: "error", message: "Selecciona una sala de chat válida." }));
