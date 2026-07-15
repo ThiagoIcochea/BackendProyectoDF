@@ -30,7 +30,10 @@ const sendEmail = async ({ to, subject, text, html }) => {
     if (error) {
       console.error('[email] resend error', error);
       console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
-      return { sent: true, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. Se registró el contenido en consola para continuar el flujo.' };
+      // Fix Bug 1: antes retornaba sent:true (fallback silencioso) aunque Resend rechazó el envío.
+      // Ahora retorna sent:false para que el flujo de autenticación pueda informar el error al usuario.
+      // REVERT: cambiar sent: false por sent: true y reason: 'resend_error' por 'resend_error'
+      return { sent: false, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. No se pudo entregar el código por correo.' };
     }
 
     return { sent: true, id: data?.id, fallback: false };

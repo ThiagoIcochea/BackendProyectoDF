@@ -96,10 +96,10 @@ const sendTwoFactorCode = async (user, method, code) => {
     sendMethod === "whatsapp"
       ? "wtsp"
       : sendMethod === "call"
-      ? "call"
-      : sendMethod === "sms"
-      ? "sms"
-      : "email";
+        ? "call"
+        : sendMethod === "sms"
+          ? "sms"
+          : "email";
 
   const nombre = encodeURIComponent(user.name || user.email);
   const numero = encodeURIComponent(String(user.phone));
@@ -109,7 +109,7 @@ const sendTwoFactorCode = async (user, method, code) => {
     https
       .get(url, (res) => {
         console.log(`[2FA] trigger ${macroMethod} status ${res.statusCode}`);
-        res.on("data", () => {});
+        res.on("data", () => { });
         res.on("end", () => resolve({ sentBy: sendMethod }));
       })
       .on("error", (err) => {
@@ -181,7 +181,7 @@ const clearLoginFailures = async (user, req) => {
   await LoginIpBlock.updateOne(
     { ip },
     { $set: { failedAttempts: 0, blockedUntil: null, reason: "" } }
-  ).catch(() => {});
+  ).catch(() => { });
 };
 
 router.post("/login", async (req, res) => {
@@ -707,7 +707,13 @@ router.post("/profile-update-request", verifyToken, async (req, res) => {
       kind: "profile"
     });
 
-    await sendTwoFactorCode(user, "email", code);
+    // Fix Bug 1: capturar resultado del envío en profile-update-request.
+    // REVERT: reemplazar por: await sendTwoFactorCode(user, "email", code);
+    const profileEmailResult = await sendTwoFactorCode(user, "email", code);
+    if (profileEmailResult?.error) {
+      pendingProfileUpdates.delete(tempToken);
+      return res.status(502).json({ message: profileEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+    }
     user.twoFactorCode = code;
     user.twoFactorMethod = "email";
     user.twoFactorTempToken = tempToken;
@@ -761,7 +767,13 @@ router.post("/change-password-request", verifyToken, async (req, res) => {
       kind: "change"
     });
 
-    await sendTwoFactorCode(user, "email", code);
+    // Fix Bug 1: capturar resultado del envío en change-password-request.
+    // REVERT: reemplazar por: await sendTwoFactorCode(user, "email", code);
+    const changePassEmailResult = await sendTwoFactorCode(user, "email", code);
+    if (changePassEmailResult?.error) {
+      pendingPasswordChanges.delete(tempToken);
+      return res.status(502).json({ message: changePassEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+    }
     user.twoFactorCode = code;
     user.twoFactorMethod = "email";
     user.twoFactorTempToken = tempToken;
@@ -898,57 +910,65 @@ router.post("/admin/forgot-password", async (req, res) => {
 
 router.post("/register", async (req, res) => {
 
-    try {
-        const normalizedEmail = normalizeEmail(req.body.email);
-        const { isValid, errors } = validateRegistrationPayload(req.body);
+  try {
+    const normalizedEmail = normalizeEmail(req.body.email);
+    const { isValid, errors } = validateRegistrationPayload(req.body);
 
-        if (!isValid) {
-            return res.status(400).json({
-                message: errors.join(". ")
-            });
-        }
-
-        const exists = await User.findOne({
-            email: normalizedEmail
-        });
-
-        if (exists) {
-            return res.status(400).json({
-                message: "El email ya existe"
-            });
-        }
-
-        const code = generateCode();
-        const tempToken = generateTempToken();
-        const now = new Date();
-        const hashedPassword = await bcrypt.hash(req.body.password, 10);
-
-        pendingRegistrations.set(tempToken, {
-            email: normalizedEmail,
-            password: hashedPassword,
-            name: req.body.name,
-            lastname: req.body.lastname,
-            phone: req.body.phone,
-            address: req.body.address,
-            city: req.body.city,
-            birthdate: req.body.birthdate,
-            sex: req.body.sex,
-            code,
-            expiresAt: new Date(now.getTime() + OTP_EXPIRE_MS)
-        });
-
-        await sendTwoFactorCode({ email: normalizedEmail, name: req.body.name }, "email", code);
-        await recordLog({ req, usuario: normalizedEmail, descripcion: "Registro iniciado con verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
-
-        return res.json({
-            message: "Verifica tu correo para completar el registro",
-            tempToken,
-            twoFactorRequired: true
-        });
-
-    } catch (error) {
-        res.status(500).json(error);
+    if (!isValid) {
+      return res.status(400).json({
+        message: errors.join(". ")
+      });
     }
+
+    const exists = await User.findOne({
+      email: normalizedEmail
+    });
+
+    if (exists) {
+      return res.status(400).json({
+        message: "El email ya existe"
+      });
+    }
+
+    const code = generateCode();
+    const tempToken = generateTempToken();
+    const now = new Date();
+    const hashedPassword = await bcrypt.hash(req.body.password, 10);
+
+    pendingRegistrations.set(tempToken, {
+      email: normalizedEmail,
+      password: hashedPassword,
+      name: req.body.name,
+      lastname: req.body.lastname,
+      phone: req.body.phone,
+      address: req.body.address,
+      city: req.body.city,
+      birthdate: req.body.birthdate,
+      sex: req.body.sex,
+      code,
+      expiresAt: new Date(now.getTime() + OTP_EXPIRE_MS)
+    });
+
+    // Fix Bug 1: el envío se verificaba solo en /login pero no en /register.
+    // Si el correo falla, el usuario quedaba varado en la pantalla de código sin recibirlo.
+    // REVERT: reemplazar el bloque completo por: await sendTwoFactorCode({ email: normalizedEmail, name: req.body.name }, "email", code);
+    const registerEmailResult = await sendTwoFactorCode({ email: normalizedEmail, name: req.body.name }, "email", code);
+    if (registerEmailResult?.error) {
+      pendingRegistrations.delete(tempToken);
+      return res.status(502).json({ message: registerEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+    }
+
+    await recordLog({ req, usuario: normalizedEmail, descripcion: "Registro iniciado con verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+
+    return res.json({
+      message: "Verifica tu correo para completar el registro",
+      tempToken,
+      twoFactorRequired: true
+    });
+
+  } catch (error) {
+    res.status(500).json(error);
+  }
 
 });
 
