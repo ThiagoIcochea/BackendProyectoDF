@@ -64,6 +64,12 @@ test('buildSupportBotReply explains its role when asked', async () => {
   assert.match(reply, /pedidos/i);
 });
 
+test('support bot replies avoid mojibake characters in its natural language output', async () => {
+  const session = createSupportSession();
+  const reply = await buildSupportBotReply('¿por qué haces esto?', session);
+  assert.doesNotMatch(reply, /ï¿½|Ã|â€™|â€œ|â€|�/);
+});
+
 test('parseOrderIntent detects purchase requests and product names', () => {
   const result = parseOrderIntent('Quiero comprar una figura de Naruto');
   assert.equal(result.isPurchase, true);

@@ -248,7 +248,7 @@ const handleClientMessage = async (socket, message) => {
       const assistantMessage = await persistMessage({
         roomKey,
         username: "NendoBot",
-        text: replyText,
+        text: String(replyText || "").trim() || "Gracias por tu mensaje. Estoy aquí para ayudarte.",
         profileImg: "",
         role: "assistant",
         meta: botMeta ? { action: botMeta } : {}

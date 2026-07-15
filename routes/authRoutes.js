@@ -51,20 +51,20 @@ const getResendFromAddress = () => {
 const generateEmailHtml = (name, code) => {
   const brand = "#9333EA";
   return `
-  <div style="font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#111;"> 
-    <div style="max-width:600px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:8px;">
+  <div style="font-family:Inter,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial;color:#111;">
+    <div style="max-width:600px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:12px;background:#ffffff;box-shadow:0 10px 30px rgba(147,51,234,0.08);">
       <div style="text-align:center;margin-bottom:18px;">
-        <div style="display:inline-block;padding:12px 18px;background:${brand};color:#fff;border-radius:8px;font-weight:600;">Nendoshop</div>
+        <div style="display:inline-block;padding:10px 16px;background:${brand};color:#fff;border-radius:999px;font-weight:700;">Nendoshop</div>
       </div>
-      <h2 style="color:${brand};font-size:20px;margin:8px 0;">Verificaci?n de seguridad</h2>
-      <p style="margin:8px 0 18px;">Hola ${name || ''},</p>
-      <p style="margin:8px 0;color:#333;">Hemos recibido una solicitud para iniciar sesi?n en tu cuenta. Usa el siguiente c?digo de verificaci?n para continuar. Este c?digo expira en 5 minutos.</p>
+      <h2 style="color:${brand};font-size:20px;margin:8px 0;">Verificación de seguridad</h2>
+      <p style="margin:8px 0 18px;">Hola ${name || ""},</p>
+      <p style="margin:8px 0;color:#333;">Hemos recibido una solicitud para iniciar sesión en tu cuenta. Usa el siguiente código de verificación para continuar. Este código expira en 5 minutos.</p>
       <div style="text-align:center;margin:20px 0;">
-        <div style="display:inline-block;padding:16px 22px;border-radius:8px;background:#f7f7fb;border:2px dashed ${brand};font-size:22px;letter-spacing:4px;color:${brand};font-weight:700;">${code}</div>
+        <div style="display:inline-block;padding:16px 22px;border-radius:10px;background:#f7f7fb;border:2px dashed ${brand};font-size:22px;letter-spacing:4px;color:${brand};font-weight:700;">${code}</div>
       </div>
-      <p style="margin:8px 0;color:#666;font-size:13px;">Si no solicitaste este c?digo, ignora este email o cambia tu contrase?a si sospechas actividad no autorizada.</p>
+      <p style="margin:8px 0;color:#666;font-size:13px;">Si no solicitaste este código, ignora este email o cambia tu contraseña si sospechas actividad no autorizada.</p>
       <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
-      <p style="font-size:12px;color:#999;margin:0;">Nendoshop ? Soporte al cliente</p>
+      <p style="font-size:12px;color:#999;margin:0;">Nendoshop · Soporte al cliente</p>
     </div>
   </div>
   `;
@@ -75,9 +75,9 @@ const sendTwoFactorCode = async (user, method, code) => {
 
   if (sendMethod === "email") {
     const result = await sendVerificationCodeEmail(user, code, {
-      subject: 'C?digo de verificaci?n - Nendoshop',
-      title: 'Verificaci?n de seguridad',
-      description: 'Usa el siguiente c?digo de verificaci?n para continuar.'
+      subject: 'Código de verificación - Nendoshop',
+      title: 'Verificación de seguridad',
+      description: 'Usa el siguiente código de verificación para continuar.'
     });
 
     if (!result.sent) {

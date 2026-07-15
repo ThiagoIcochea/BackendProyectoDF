@@ -34,10 +34,9 @@ const buildProductLink = (id) => {
   return `${base}/#/product/${id}`;
 };
 
-// Fix Bug 2: cadena corregida ? encoding Mojibake (Latin-1 le?do como UTF-8) ? UTF-8 correcto.
-// REVERT: restaurar la cadena anterior con los caracteres ï¿½, ï¿½, etc.
+// Support bot intro kept in plain UTF-8 Spanish text to avoid mojibake artifacts.
 const SUPPORT_INTRO =
-  "Hola, soy NendoBot, tu asesor de atenci?n al cliente de NendoShop. Te puedo ayudar con pedidos, productos, reclamos, devoluciones y cuentas. Tambi?n puedo orientarte sobre un producto espec?fico o ayudarte a encontrar el m?s econ?mico.";
+  "Hola, soy NendoBot, tu asesor de atención al cliente de NendoShop. Te puedo ayudar con pedidos, productos, reclamos, devoluciones y cuentas. También puedo orientarte sobre un producto específico o ayudarte a encontrar el más económico.";
 
 const LEET_SUBSTITUTIONS = {
   "0": "o",
@@ -53,9 +52,6 @@ const LEET_SUBSTITUTIONS = {
   "9": "g"
 };
 
-// Fix Bug 2: stripAccents ten?a rangos de regex corruptos (Mojibake en los literales de caracteres).
-// Se simplific? a NFD + \p{M} que es la forma can?nica y correcta en Node.js con flag /gu.
-// REVERT: restaurar los .replace() originales con ï¿½, ï¿½, etc.
 const stripAccents = (text) =>
   String(text || "")
     .normalize("NFD")
@@ -63,9 +59,8 @@ const stripAccents = (text) =>
 
 const applyLeetSubstitutions = (text) =>
   String(text || "").replace(/[01345789!@$]/g, (ch) => LEET_SUBSTITUTIONS[ch] || ch);
-// Fix Bug 2: el car?cter ? es mojibake de ?. Corregido a ?.
-// REVERT: reemplazar ? por ï¿½
-const collapseRepeatedChars = (text) => String(text || "").replace(/([a-z0-9?])\1+/g, "$1");
+// Collapse repeated characters without introducing mojibake artifacts.
+const collapseRepeatedChars = (text) => String(text || "").replace(/([a-z0-9])\1+/g, "$1");
 const buildNormalizedVariants = (text) => {
   const lowered = String(text || "").toLowerCase();
   const noAccents = stripAccents(lowered);
@@ -75,6 +70,57 @@ const buildNormalizedVariants = (text) => {
     spacedCollapsed: collapseRepeatedChars(deLeeted)
   };
 };
+
+const CLAIM_CATEGORY_ALIASES = {
+  demora: "delay",
+  retraso: "delay",
+  tarde: "delay",
+  atrasado: "delay",
+  atrasada: "delay",
+  devolucion: "return",
+  devolución: "return",
+  reembolso: "return",
+  refund: "return",
+  regreso: "return",
+  cancelacion: "cancel",
+  cancelación: "cancel",
+  cancelar: "cancel",
+  incompleto: "incomplete",
+  incompleta: "incomplete",
+  faltante: "incomplete",
+  falta: "incomplete",
+  faltan: "incomplete",
+  dañado: "damaged",
+  daniado: "damaged",
+  dañada: "damaged",
+  daniada: "damaged",
+  roto: "damaged",
+  rota: "damaged",
+  quebrado: "damaged",
+  quebrada: "damaged",
+  mal: "damaged",
+  fallo: "delay",
+  error: "delay",
+  problema: "delay",
+  incidente: "delay"
+};
+
+const normalizeBotText = (text) => String(text || "")
+  .replace(/Ã¡/g, "á")
+  .replace(/Ã©/g, "é")
+  .replace(/Ã­/g, "í")
+  .replace(/Ã³/g, "ó")
+  .replace(/Ãº/g, "ú")
+  .replace(/Ã±/g, "ñ")
+  .replace(/Ã¼/g, "ü")
+  .replace(/Â/g, "")
+  .replace(/â€™/g, "'")
+  .replace(/â€œ/g, '"')
+  .replace(/â€/g, '"')
+  .replace(/â€/g, '"')
+  .replace(/â€‹/g, "")
+  .replace(/â€“/g, "-")
+  .replace(/ï¿½/g, "ó");
 
 const BLOCKED_TERMS = {
   sexual: [
@@ -90,9 +136,7 @@ const BLOCKED_TERMS = {
     "bomba", "bombardear", "suicida", "suicidio", "suicidarse",
     "terrorismo", "terrorista", "secuestrar", "secuestro", "torturar",
     "tortura", "amenazar", "amenaza", "lastimarte", "herirte", "disparar",
-    // Fix Bug 2: "daï¿½o" ? "da?o"
-    // REVERT: cambiar da?o por daï¿½o
-    "masacre", "hacerte da?o"
+    "masacre", "hacerte daño"
   ],
   insultos: [
     "puta", "puto", "putas", "putos", "mierda", "idiota", "estupido",
@@ -124,9 +168,7 @@ const ELONGATION_PATTERNS = ELONGATION_WORDS.map((word) => new RegExp(`\\b${esca
 const checkTextSafety = (text) => {
   const raw = String(text || "").trim();
   if (!raw) {
-    // Fix Bug 2: "estï¿½ vacï¿½o" ? "est? vac?o"
-    // REVERT: cambiar "est? vac?o" por "estï¿½ vacï¿½o"
-    return { allowed: false, block: true, reason: "El mensaje est? vac?o." };
+    return { allowed: false, block: true, reason: "El mensaje está vacío." };
   }
 
   const { spaced, spacedCollapsed } = buildNormalizedVariants(raw);
@@ -173,9 +215,7 @@ const pushHistory = (session, role, text) => {
 
 const extractOrderNumber = (text) => {
   const normalized = String(text || "").trim();
-  // Fix Bug 2: nï¿½ ? n? en regex
-  // REVERT: cambiar n? por nï¿½
-  const match = normalized.match(/(?:pedido|orden|n(?:Ãº|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id)[^a-z0-9]*([a-z0-9]{4,})/i);
+  const match = normalized.match(/(?:pedido|orden|n(?:ú|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id)[^a-z0-9]*([a-z0-9]{4,})/i);
   if (match) return match[1];
   const fallback = normalized.match(/\b([a-z0-9]{6,})\b/i);
   return fallback ? fallback[1] : null;
@@ -183,18 +223,16 @@ const extractOrderNumber = (text) => {
 
 const extractProductHint = (text) => {
   const normalized = String(text || "").toLowerCase();
-  // Fix Bug 2: regexes con ï¿½, ï¿½, ï¿½, ï¿½, ï¿½, ï¿½ ? ?, ?, ?, ?, ?, ?
-  // REVERT: restaurar los caracteres ï¿½, ï¿½, etc. en los rangos de caracteres
   const patterns = [
-    /(?:producto|figura|art(?:Ã­|i)culo|modelo|articulo|artÃ­culo)[^a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9]*([a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9 .,'\-]+)/i,
-    /(?:quiero|busco|necesito|interesa|recomienda|ver|agrega|aÃ±ade|agregar|aÃ±adir|sumar)[^a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9]*([a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9 .,'\-]+)/i,
-    /(?:de|la|el|un|una|por|para|con)\s+([a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9 .,'\-]{2,})/i
+    /(?:producto|figura|art(?:í|i)culo|modelo|articulo|artículo)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'\-]+)/i,
+    /(?:quiero|busco|necesito|interesa|recomienda|ver|agrega|añade|agregar|añadir|sumar)[^a-záéíóúñü0-9]*([a-záéíóúñü0-9 .,'\-]+)/i,
+    /(?:de|la|el|un|una|por|para|con)\s+([a-záéíóúñü0-9 .,'\-]{2,})/i
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
-      const value = match[1].trim().replace(/\b(agregar|aÃ±adir|sumar|producto|figura|articulo|artÃ­culo|modelo|el|la|un|una|por|para|con|quiero|busco|necesito|interesa|recomienda|ver|de)\b/gi, "").trim();
+      const value = match[1].trim().replace(/\b(agregar|añadir|sumar|producto|figura|articulo|artículo|modelo|el|la|un|una|por|para|con|quiero|busco|necesito|interesa|recomienda|ver|de)\b/gi, "").trim();
       if (value) return value;
     }
   }
@@ -224,30 +262,24 @@ const isClaimIntent = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized) return false;
   const lowered = stripAccents(normalized).toLowerCase();
-  // Fix Bug 2: adios ? adi?s, como est?s, fall?, da?ado, cancelaci?n, devoluci?n, lleg?
-  // REVERT: restaurar los caracteres mojibake en las regexes
-  if (/\b(hola|buenos|buenas|gracias|adios|adi?s|estoy bien|todo bien|como estas|como est?s)\b/i.test(normalized)) return false;
-  const hasClaimKeyword = /\b(reclamo|reclamar|queja|quejas|problema|problemas|incidente|fallo|fallar|fall?|da?ado|da?ada|incompleto|incompleta|retraso|demora|demorado|cancelacion|cancelaci?n|devolucion|devoluci?n|reembolso|refund|error|no lleg[?o]|lleg[?o]|lleg[ao]|entreg[ao]|roto|rota|perdido|perdida)\b/i.test(lowered);
+  if (/\b(hola|buenos|buenas|gracias|adios|adiós|estoy bien|todo bien|como estas|como estás)\b/i.test(normalized)) return false;
+  const hasClaimKeyword = /\b(reclamo|reclamar|queja|quejas|problema|problemas|incidente|fallo|fallar|falla|falla|dañado|daniado|dañada|daniada|incompleto|incompleta|retraso|demora|demorado|cancelacion|cancelación|devolucion|devolución|reembolso|refund|error|no lleg[oó]|llego|llegó|entrego|entregó|roto|rota|perdido|perdida)\b/i.test(lowered);
   return hasClaimKeyword || /\b(genera|genera el|crea|crea el|haz|hace)\s+(el\s+)?(reclamo|reclamar)\b/i.test(lowered);
 };
 
 const inferClaimCategory = (text) => {
   const normalized = stripAccents(String(text || "").trim()).toLowerCase();
-  // Fix Bug 2: daï¿½ado ? da?ado, devoluciï¿½n ? devoluci?n, cancelaciï¿½n ? cancelaci?n
-  // REVERT: restaurar los caracteres mojibake en los patrones
-  const priority = [
-    /\b(incompleto|incompleta|faltante|falta|faltan|mal|da?ado|daniado|roto|rota|quebrado|quebrada)\b/i,
-    /\b(demora|retraso|tarde|atrasado|atrasada)\b/i,
-    /\b(devolucion|devoluci?n|devolutiva|reembolso|refund|regreso)\b/i,
-    /\b(cancelacion|cancelaci?n|cancelar)\b/i,
-    /\b(fallo|fallo|error|problema|incidente)\b/i
+  const patterns = [
+    { pattern: /\b(incompleto|incompleta|faltante|falta|faltan|mal|dañado|daniado|roto|rota|quebrado|quebrada)\b/i, category: "incomplete" },
+    { pattern: /\b(demora|retraso|tarde|atrasado|atrasada)\b/i, category: "delay" },
+    { pattern: /\b(devolucion|devolución|devolutiva|reembolso|refund|regreso)\b/i, category: "return" },
+    { pattern: /\b(cancelacion|cancelación|cancelar)\b/i, category: "cancel" },
+    { pattern: /\b(fallo|error|problema|incidente)\b/i, category: "delay" }
   ];
 
-  for (const pattern of priority) {
+  for (const { pattern, category } of patterns) {
     if (pattern.test(normalized)) {
-      const match = normalized.match(pattern);
-      const raw = match?.[0] || "";
-      return CLAIM_CATEGORY_ALIASES[raw] || CLAIM_CATEGORY_ALIASES[raw.toLowerCase()] || "delay";
+      return category;
     }
   }
 
@@ -256,14 +288,14 @@ const inferClaimCategory = (text) => {
 const parseClaimRequest = (text) => {
   const normalized = String(text || "").trim();
   if (!normalized || !isClaimIntent(normalized)) return null;
-  const explicitOrderMatch = normalized.match(/\b(?:reclamo|reclamar|queja|problema)\b[^a-z0-9]*(?:a|para|por|del|de|sobre|con)\s+(?:el\s+)?(?:n(?:ï¿½|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?\s+)?([a-z0-9]{4,})/i);
+  const explicitOrderMatch = normalized.match(/\b(?:reclamo|reclamar|queja|problema)\b[^a-z0-9]*(?:a|para|por|del|de|sobre|con)\s+(?:el\s+)?(?:n(?:ú|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?\s+)?([a-z0-9]{4,})/i);
   const orderMatch =
     explicitOrderMatch ||
-    normalized.match(/(?:pedido|orden|compra|id|n(?:ï¿½|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento)[^a-z0-9]*([a-z0-9]{4,})/i) ||
-    normalized.match(/\b([a-z0-9]{6,})\b/i);
+    normalized.match(/(?:pedido|orden|compra|id|n(?:ú|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento)[^a-z0-9]*([a-z0-9]{4,})/i) ||
+    normalized.match(/\b([a-z0-9]{4,})\b/i);
   const description = normalized
-    .replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|queja|problema|pedido|orden|compra|n(?:ï¿½|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace|sobre|del|de)\s+/gi, " ")
-    .replace(/\b(?:pedido|orden|n(?:ï¿½|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id)\s+[a-z0-9]{4,}\b/gi, " ")
+    .replace(/(?:quiero|quieres|necesito|hacer|crear|abrir|generar|registrar|presentar|reclamo|reclamar|queja|problema|pedido|orden|compra|n(?:ú|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id|por|por favor|porfa|ayuda|con|el|la|un|una|mi|tengo|genera|genera el|crea|crea el|haz|hace|sobre|del|de)\s+/gi, " ")
+    .replace(/\b(?:pedido|orden|n(?:ú|u)mero(?:\s+de)?(?:\s+pedido|\s+orden)?|seguimiento|id)\s+[a-z0-9]{4,}\b/gi, " ")
     .trim();
   return {
     orderNumber: orderMatch?.[1] || null,
@@ -307,13 +339,13 @@ const parseProfileChangeRequest = (text) => {
   const photoMatch = normalized.match(/\b(foto|imagen|avatar|photo|profile)(?:\s+de\s+perfil)?\b/i);
   if (photoMatch) {
     const explicitUrl = extractProfileImageValue(normalized);
-    return { kind: "photo", newValue: explicitUrl };
+    return { kind: "photo", newValue: explicitUrl || null };
   }
 
   const phonePatterns = [
-    /(?:tel(?:e|Ã©)?fono|telefono|phone|celular|numero|n(?:Ãº|u)mero|telfono|tel)[^0-9+]*([0-9+\-\s]{4,})/i,
-    /(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cambiame|cÃ¡mbiame|cambie|cÃ¡mbie|cambiamelo)(?:\s|[^a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9])*?(?:tel(?:e|Ã©)?fono|telefono|phone|celular|numero|n(?:Ãº|u)mero|telfono|tel)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
-    /(?:tel(?:e|Ã©)?fono|telefono|phone|celular|numero|n(?:Ãº|u)mero|telfono|tel)(?:\s|[^a-zÃ¡Ã©Ã­Ã³ÃºÃ±Ã¼0-9])*?(?:a|al|nuevo|nueva|por|:)?(?:\s*)([0-9+\-\s]{4,})/i
+    /\b(?:tel(?:e|é)?fono|telefono|phone|celular|numero|n(?:ú|u)mero|telfono|tel)\b[^0-9+]*([0-9+\-\s]{4,})/i,
+    /\b(?:cambiar|cambio|actualizar|modificar|editar|poner|cambia|actualiza|modifica|edita|setea|asigna|cambiame|cámbiame|cambie|cambie|cambiamelo)\b(?:\s|[^a-záéíóúñü0-9])*?(?:tel(?:e|é)?fono|telefono|phone|celular|numero|n(?:ú|u)mero|telfono|tel)(?:[^0-9+]*)([0-9+\-\s]{4,})/i,
+    /\b(?:tel(?:e|é)?fono|telefono|phone|celular|numero|n(?:ú|u)mero|telfono|tel)(?:\s|[^a-záéíóúñü0-9])*?(?:a|al|nuevo|nueva|por|:)?(?:\s*)([0-9+\-\s]{4,})/i
   ];
 
   for (const pattern of phonePatterns) {
@@ -323,7 +355,7 @@ const parseProfileChangeRequest = (text) => {
     }
   }
 
-  const passwordMatch = normalized.match(/(?:contrase(?:Ã±|n)a|password)[^\w]*?(?:a|al|nueva|nuevo)?[^\w]*([A-Za-z0-9!@#$%^&*()_+=\-]{4,})/i);
+  const passwordMatch = normalized.match(/(?:contrase(?:ñ|n)a|password)[^\w]*?(?:a|al|nueva|nuevo)?[^\w]*([A-Za-z0-9!@#$%^&*()_+=\-]{4,})/i);
   if (passwordMatch) {
     return { kind: "password", newPassword: passwordMatch[1].trim() };
   }
@@ -834,6 +866,33 @@ const handleProfileUpdateRequest = async (text, session) => {
   }
 
   return "Puedo actualizar tu perfil. Dï¿½me quï¿½ dato quieres cambiar y el nuevo valor, por ejemplo: cambia mi direcciï¿½n a Av. Siempre Viva 123.";
+};
+
+const handleClaimRequest = async (text, session) => {
+  if (!session) return null;
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+
+  if (session.pendingClaim?.step === "waiting_for_order") {
+    const orderNumber = extractOrderNumber(normalized);
+    if (orderNumber) {
+      session.pendingClaim = { step: "waiting_for_description", orderNumber, category: "delay" };
+      return `Perfecto, voy a revisar el pedido ${orderNumber}. Describe brevemente lo que pasó para registrar el reclamo.`;
+    }
+    return "Claro, necesito el número de pedido para registrar tu reclamo. Compárteme el número o el ID del pedido.";
+  }
+
+  if (isClaimIntent(normalized) || /reclamo|reclamar|queja/i.test(normalized)) {
+    const parsedClaim = parseClaimRequest(normalized);
+    if (parsedClaim?.orderNumber) {
+      session.pendingClaim = { step: "waiting_for_description", orderNumber: parsedClaim.orderNumber, category: parsedClaim.category };
+      return `Perfecto, voy a revisar el pedido ${parsedClaim.orderNumber}. Describe brevemente lo que pasó para registrar el reclamo.`;
+    }
+    session.pendingClaim = { step: "waiting_for_order", orderNumber: null, category: null };
+    return "Claro, necesito el número de pedido para registrar tu reclamo. Compárteme el número o el ID del pedido.";
+  }
+
+  return null;
 };
 
 const handleCheckoutRequest = async (text, session) => {

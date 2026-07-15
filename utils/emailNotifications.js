@@ -15,12 +15,14 @@ const getFallbackFromAddress = () => {
   return "onboarding@resend.dev";
 };
 
+const normalizeText = (value) => String(value || "").replace(/\r\n/g, "\n").replace(/[\u0000-\u001f\u007f]/g, "");
+
 const buildSendPayload = ({ from, to, subject, text, html }) => ({
   from,
   to: [to],
-  subject,
-  text,
-  html
+  subject: normalizeText(subject),
+  text: normalizeText(text),
+  html: normalizeText(html)
 });
 
 const sendEmail = async ({ to, subject, text, html }) => {
@@ -108,15 +110,18 @@ const sendVerificationCodeEmail = async (
   if (!user?.email) return { sent: false, reason: "missing_email" };
 
   const html = `
-    <div style="font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;">
-      <div style="max-width:560px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:10px;">
-        <h2 style="color:#9333EA;margin-bottom:8px;">${title}</h2>
-        <p>Hola ${user.name || user.email},</p>
-        <p>${description}</p>
-        <div style="text-align:center;padding:20px 0;">
-          <div style="display:inline-block;padding:16px 24px;border-radius:8px;background:#f7f7fb;border:2px dashed #9333EA;font-size:22px;letter-spacing:4px;font-weight:700;color:#9333EA;">${code}</div>
+    <div style="font-family:Inter,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#111;">
+      <div style="max-width:560px;margin:0 auto;padding:24px;border:1px solid #eee;border-radius:12px;background:#ffffff;box-shadow:0 10px 30px rgba(147,51,234,0.08);">
+        <div style="text-align:center;margin-bottom:18px;">
+          <div style="display:inline-block;padding:10px 16px;border-radius:999px;background:#9333EA;color:#ffffff;font-weight:700;letter-spacing:0.4px;">Nendoshop</div>
         </div>
-        <p style="font-size:13px;color:#666;">Este código expira en 5 minutos. Si no solicitaste esta acción, ignora este mensaje.</p>
+        <h2 style="color:#9333EA;margin:0 0 8px;font-size:22px;">${title}</h2>
+        <p style="margin:0 0 8px;font-size:15px;">Hola ${user.name || user.email},</p>
+        <p style="margin:0 0 16px;font-size:15px;">${description}</p>
+        <div style="text-align:center;padding:16px 0 8px;">
+          <div style="display:inline-block;padding:16px 24px;border-radius:10px;background:#f7f7fb;border:2px dashed #9333EA;font-size:24px;letter-spacing:4px;font-weight:700;color:#9333EA;">${code}</div>
+        </div>
+        <p style="margin:16px 0 0;font-size:13px;color:#666;line-height:1.6;">Este código expira en 5 minutos. Si no solicitaste esta acción, ignora este mensaje.</p>
       </div>
     </div>
   `;
