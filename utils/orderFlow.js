@@ -18,11 +18,34 @@ const calculateDeliveryDeadline = (createdAt, products = []) => {
   return deadline;
 };
 
+const isBusinessDay = (date) => {
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+};
+
+const addBusinessHours = (startDate, hours) => {
+  const start = toDate(startDate);
+  const totalHours = Number(hours);
+  if (!start || !Number.isFinite(totalHours) || totalHours <= 0) return start;
+
+  const result = new Date(start);
+  let remainingHours = Math.ceil(totalHours);
+
+  while (remainingHours > 0) {
+    result.setHours(result.getHours() + 1);
+    if (isBusinessDay(result)) {
+      remainingHours -= 1;
+    }
+  }
+
+  return result;
+};
+
 const buildSlaMessage = (deadlineDate) => {
   const deadline = toDate(deadlineDate);
   if (!deadline) return "Consultar con soporte para conocer el tiempo estimado de entrega.";
   return `Tu pedido debería entregarse máximo hasta el ${deadline.toLocaleDateString('es-PE')}.
-  Si pasan 48 horas desde esa fecha y el estado sigue pendiente o en tránsito, puedes generar un reclamo por demora.`;
+  Si pasan 48 horas hábiles desde esa fecha y el estado sigue pendiente o en tránsito, puedes generar un reclamo por demora.`;
 };
 
 const canCreateClaim = ({ category, currentStatus, deadlineDate, existingClaims = [] }, now = new Date()) => {
@@ -50,10 +73,9 @@ const canCreateClaim = ({ category, currentStatus, deadlineDate, existingClaims 
       return { allowed: false, reason: 'No hay una fecha límite definida para este pedido.' };
     }
 
-    const slaDeadline = new Date(deadline);
-    slaDeadline.setHours(slaDeadline.getHours() + DEFAULT_SLA_HOURS);
+    const slaDeadline = addBusinessHours(deadline, DEFAULT_SLA_HOURS);
     if (currentDate < slaDeadline) {
-      return { allowed: false, reason: 'El reclamo por demora solo está habilitado 48 horas después de la fecha máxima de entrega.' };
+      return { allowed: false, reason: 'El reclamo por demora solo está habilitado 48 horas hábiles después de la fecha máxima de entrega.' };
     }
 
     return { allowed: true, reason: 'Reclamo habilitado.' };
@@ -88,6 +110,7 @@ const canCreateClaim = ({ category, currentStatus, deadlineDate, existingClaims 
 
 module.exports = {
   calculateDeliveryDeadline,
+  addBusinessHours,
   buildSlaMessage,
   canCreateClaim,
   DEFAULT_SLA_HOURS

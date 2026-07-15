@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { calculateDeliveryDeadline, canCreateClaim } = require('../utils/orderFlow');
+const { calculateDeliveryDeadline, addBusinessHours, canCreateClaim } = require('../utils/orderFlow');
 const { isValidStatusTransition } = require('../utils/deliveryStatusFlow');
 
 test('calculateDeliveryDeadline uses the highest delivery window among products', () => {
@@ -35,6 +35,29 @@ test('canCreateClaim allows a delay claim after the SLA window', () => {
   }, new Date('2026-07-09T00:00:00.000Z'));
 
   assert.equal(result.allowed, true);
+});
+
+test('canCreateClaim counts delay SLA as 48 business hours', () => {
+  const deadline = new Date('2026-07-10T00:00:00.000Z');
+
+  assert.equal(addBusinessHours(deadline, 48).toISOString(), '2026-07-14T00:00:00.000Z');
+
+  const beforeBusinessSla = canCreateClaim({
+    category: 'delay',
+    currentStatus: 'shipped',
+    deadlineDate: deadline,
+    existingClaims: []
+  }, new Date('2026-07-13T23:59:59.000Z'));
+
+  const afterBusinessSla = canCreateClaim({
+    category: 'delay',
+    currentStatus: 'shipped',
+    deadlineDate: deadline,
+    existingClaims: []
+  }, new Date('2026-07-14T00:00:00.000Z'));
+
+  assert.equal(beforeBusinessSla.allowed, false);
+  assert.equal(afterBusinessSla.allowed, true);
 });
 
 test('canCreateClaim blocks an incomplete claim before delivery', () => {
