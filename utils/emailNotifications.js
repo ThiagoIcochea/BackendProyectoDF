@@ -9,6 +9,20 @@ const getFromAddress = () => {
   return 'onboarding@resend.dev';
 };
 
+const getFallbackFromAddress = () => {
+  const raw = (process.env.RESEND_FALLBACK_FROM_EMAIL || '').trim();
+  if (raw && raw.includes('@')) return raw;
+  return 'onboarding@resend.dev';
+};
+
+const buildSendPayload = ({ from, to, subject, text, html }) => ({
+  from,
+  to: [to],
+  subject,
+  text,
+  html
+});
+
 const sendEmail = async ({ to, subject, text, html }) => {
   if (!to) return { sent: false, reason: 'missing_email' };
 
@@ -19,28 +33,28 @@ const sendEmail = async ({ to, subject, text, html }) => {
 
   try {
     const from = getFromAddress();
-    const { data, error } = await resendClient.emails.send({
-      from,
-      to: [to],
-      subject,
-      text,
-      html
-    });
+    const { data, error } = await resendClient.emails.send(buildSendPayload({ from, to, subject, text, html }));
 
     if (error) {
       console.error('[email] resend error', error);
       console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
-      // Fix Bug 1: antes retornaba sent:true (fallback silencioso) aunque Resend rechazó el envío.
-      // Ahora retorna sent:false para que el flujo de autenticación pueda informar el error al usuario.
-      // REVERT: cambiar sent: false por sent: true y reason: 'resend_error' por 'resend_error'
-      return { sent: false, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. No se pudo entregar el código por correo.' };
+
+      const fallbackFrom = getFallbackFromAddress();
+      if (fallbackFrom !== from) {
+        const retry = await resendClient.emails.send(buildSendPayload({ from: fallbackFrom, to, subject, text, html }));
+        if (!retry?.error) {
+          return { sent: true, fallback: true, reason: 'sender_fallback', id: retry?.data?.id, from: fallbackFrom };
+        }
+      }
+
+      return { sent: false, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. Revisa que el dominio o remitente estén verificados en tu cuenta.' };
     }
 
     return { sent: true, id: data?.id, fallback: false };
   } catch (error) {
     console.error('[email] send failure', error);
     console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
-    return { sent: true, fallback: true, reason: 'exception', message: error?.message || 'No se pudo enviar el correo. Se registró en consola para continuar el flujo.' };
+    return { sent: false, fallback: true, reason: 'exception', message: error?.message || 'No se pudo enviar el correo. Se registró en consola para continuar el flujo.' };
   }
 };
 
@@ -54,7 +68,15 @@ const sendOrderUpdateEmail = async (user, subject, message) => {
   });
 };
 
-const sendVerificationCodeEmail = async (user, code, { subject = 'Código de verificación - Nendoshop', title = 'Verificación de seguridad', description = 'Tu código de verificación es:' } = {}) => {
+const sendVerificationCodeEmail = async (
+  user,
+  code,
+  {
+    subject = 'Código de verificación - Nendoshop',
+    title = 'Verificación de seguridad',
+    description = 'Tu código de verificación es:'
+  } = {}
+) => {
   if (!user?.email) return { sent: false, reason: 'missing_email' };
 
   const html = `
@@ -79,4 +101,4 @@ const sendVerificationCodeEmail = async (user, code, { subject = 'Código de ver
   });
 };
 
-module.exports = { getFromAddress, sendOrderUpdateEmail, sendVerificationCodeEmail };
+module.exports = { getFromAddress, sendOrderUpdateEmail, sendVerificationCodeEmail, sendEmail };

@@ -56,15 +56,15 @@ const generateEmailHtml = (name, code) => {
       <div style="text-align:center;margin-bottom:18px;">
         <div style="display:inline-block;padding:12px 18px;background:${brand};color:#fff;border-radius:8px;font-weight:600;">Nendoshop</div>
       </div>
-      <h2 style="color:${brand};font-size:20px;margin:8px 0;">Verificación de seguridad</h2>
+      <h2 style="color:${brand};font-size:20px;margin:8px 0;">Verificaci?n de seguridad</h2>
       <p style="margin:8px 0 18px;">Hola ${name || ''},</p>
-      <p style="margin:8px 0;color:#333;">Hemos recibido una solicitud para iniciar sesión en tu cuenta. Usa el siguiente código de verificación para continuar. Este código expira en 5 minutos.</p>
+      <p style="margin:8px 0;color:#333;">Hemos recibido una solicitud para iniciar sesi?n en tu cuenta. Usa el siguiente c?digo de verificaci?n para continuar. Este c?digo expira en 5 minutos.</p>
       <div style="text-align:center;margin:20px 0;">
         <div style="display:inline-block;padding:16px 22px;border-radius:8px;background:#f7f7fb;border:2px dashed ${brand};font-size:22px;letter-spacing:4px;color:${brand};font-weight:700;">${code}</div>
       </div>
-      <p style="margin:8px 0;color:#666;font-size:13px;">Si no solicitaste este código, ignora este email o cambia tu contraseña si sospechas actividad no autorizada.</p>
+      <p style="margin:8px 0;color:#666;font-size:13px;">Si no solicitaste este c?digo, ignora este email o cambia tu contrase?a si sospechas actividad no autorizada.</p>
       <hr style="border:none;border-top:1px solid #eee;margin:20px 0;" />
-      <p style="font-size:12px;color:#999;margin:0;">Nendoshop · Soporte al cliente</p>
+      <p style="font-size:12px;color:#999;margin:0;">Nendoshop ? Soporte al cliente</p>
     </div>
   </div>
   `;
@@ -75,20 +75,20 @@ const sendTwoFactorCode = async (user, method, code) => {
 
   if (sendMethod === "email") {
     const result = await sendVerificationCodeEmail(user, code, {
-      subject: 'Código de verificación - Nendoshop',
-      title: 'Verificación de seguridad',
-      description: 'Usa el siguiente código de verificación para continuar.'
+      subject: 'C?digo de verificaci?n - Nendoshop',
+      title: 'Verificaci?n de seguridad',
+      description: 'Usa el siguiente c?digo de verificaci?n para continuar.'
     });
 
     if (!result.sent) {
-      return { sentBy: 'email', error: true, reason: result.reason || 'resend_error', message: result.message || 'No se pudo enviar el correo de verificación.' };
+      return { sentBy: 'email', error: true, reason: result.reason || 'resend_error', message: result.message || 'No se pudo enviar el correo de verificaci?n.' };
     }
 
     return { sentBy: 'email', data: result };
   }
 
   if (!user.phone) {
-    console.log(`[2FA] Sin teléfono para ${sendMethod}; enviando por correo: ${code}`);
+    console.log(`[2FA] Sin tel?fono para ${sendMethod}; enviando por correo: ${code}`);
     return Promise.resolve({ sentBy: "email" });
   }
 
@@ -218,7 +218,7 @@ router.post("/login", async (req, res) => {
       await registerUserLoginFailure(user, req, "Administrador intento entrar desde login general");
       await recordLog({ req, usuario: user.email, descripcion: "Intento de login de administrador desde el login general", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(403).json({
-        message: "El acceso administrativo solo está permitido desde el panel dedicado.",
+        message: "El acceso administrativo solo est? permitido desde el panel dedicado.",
         requiresAdminAccess: true
       });
     }
@@ -233,13 +233,13 @@ router.post("/login", async (req, res) => {
 
     if (!validPassword) {
       await registerUserLoginFailure(user, req, "Password incorrecta");
-      await recordLog({ req, usuario: user.email, descripcion: "Intento de login con contraseña incorrecta", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Intento de login con contrase?a incorrecta", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(401).json({ message: "Password incorrecta" });
     }
 
     if (isBlocked(user)) {
       return res.status(403).json({
-        message: "La cuenta está bloqueada temporalmente por demasiados intentos fallidos. Intenta de nuevo en unos minutos."
+        message: "La cuenta est? bloqueada temporalmente por demasiados intentos fallidos. Intenta de nuevo en unos minutos."
       });
     }
 
@@ -249,7 +249,7 @@ router.post("/login", async (req, res) => {
 
     const emailResult = await sendTwoFactorCode(user, "email", code);
     if (emailResult?.error) {
-      return res.status(502).json({ message: emailResult.message || "No se pudo enviar el código por correo." });
+      return res.status(502).json({ message: emailResult.message || "No se pudo enviar el c?digo por correo." });
     }
 
     user.twoFactorCode = code;
@@ -266,13 +266,13 @@ router.post("/login", async (req, res) => {
     await user.save();
     await clearLoginFailures(user, req);
 
-    await recordLog({ req, usuario: user.email, descripcion: "Inicio de sesión solicitado con verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+    await recordLog({ req, usuario: user.email, descripcion: "Inicio de sesi?n solicitado con verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
     return res.json({
       twoFactorRequired: true,
       tempToken,
       method: "email",
-      message: "Se ha enviado el código por correo"
+      message: "Se ha enviado el c?digo por correo"
     });
   } catch (error) {
     res.status(500).json(error);
@@ -315,11 +315,11 @@ router.post("/resend-2fa", async (req, res) => {
       pendingRegistrations.set(tempToken, entry);
       const emailResult = await sendTwoFactorCode({ email: entry.email, name: entry.name }, sendMethod, newCode);
       if (emailResult?.error) {
-        return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el código por correo." });
+        return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el c?digo por correo." });
       }
 
       return res.json({
-        message: "Código reenviado",
+        message: "C?digo reenviado",
         method: sendMethod,
         waitSeconds: 30
       });
@@ -337,7 +337,7 @@ router.post("/resend-2fa", async (req, res) => {
       if (user.twoFactorLastSentAt && now - user.twoFactorLastSentAt < RESEND_WAIT_MS) {
         const waitSeconds = Math.ceil((RESEND_WAIT_MS - (now - user.twoFactorLastSentAt)) / 1000);
         return res.status(429).json({
-          message: `Espera ${waitSeconds} segundos antes de reenviar el código.`
+          message: `Espera ${waitSeconds} segundos antes de reenviar el c?digo.`
         });
       }
 
@@ -345,7 +345,7 @@ router.post("/resend-2fa", async (req, res) => {
       const sendMethod = method || "email";
       const emailResult = await sendTwoFactorCode(user, sendMethod, newCode);
       if (emailResult?.error) {
-        return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el código por correo." });
+        return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el c?digo por correo." });
       }
 
       user.twoFactorCode = newCode;
@@ -356,7 +356,7 @@ router.post("/resend-2fa", async (req, res) => {
       await user.save();
 
       return res.json({
-        message: "Código reenviado",
+        message: "C?digo reenviado",
         method: sendMethod,
         waitSeconds: 30
       });
@@ -369,12 +369,12 @@ router.post("/resend-2fa", async (req, res) => {
     }
 
     if (user.twoFactorTempToken !== tempToken) {
-      return res.status(401).json({ message: "Token de verificación inválido" });
+      return res.status(401).json({ message: "Token de verificaci?n inv?lido" });
     }
 
     if (isBlocked(user)) {
       return res.status(403).json({
-        message: "La cuenta está bloqueada temporalmente por muchos intentos fallidos. Intenta de nuevo en unos minutos."
+        message: "La cuenta est? bloqueada temporalmente por muchos intentos fallidos. Intenta de nuevo en unos minutos."
       });
     }
 
@@ -382,7 +382,7 @@ router.post("/resend-2fa", async (req, res) => {
     if (user.twoFactorLastSentAt && now - user.twoFactorLastSentAt < RESEND_WAIT_MS) {
       const waitSeconds = Math.ceil((RESEND_WAIT_MS - (now - user.twoFactorLastSentAt)) / 1000);
       return res.status(429).json({
-        message: `Espera ${waitSeconds} segundos antes de reenviar el código.`
+        message: `Espera ${waitSeconds} segundos antes de reenviar el c?digo.`
       });
     }
 
@@ -391,7 +391,7 @@ router.post("/resend-2fa", async (req, res) => {
 
     const emailResult = await sendTwoFactorCode(user, sendMethod, newCode);
     if (emailResult?.error) {
-      return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el código por correo." });
+      return res.status(502).json({ message: emailResult.message || "No se pudo reenviar el c?digo por correo." });
     }
 
     user.twoFactorCode = newCode;
@@ -403,7 +403,7 @@ router.post("/resend-2fa", async (req, res) => {
     await user.save();
 
     return res.json({
-      message: "Código reenviado",
+      message: "C?digo reenviado",
       method: sendMethod,
       waitSeconds: 30
     });
@@ -418,7 +418,7 @@ router.post("/verify-2fa", async (req, res) => {
     const normalizedEmail = normalizeEmail(email);
 
     if (!normalizedEmail || !tempToken || !code) {
-      return res.status(400).json({ message: "Email, token y código son requeridos" });
+      return res.status(400).json({ message: "Email, token y c?digo son requeridos" });
     }
 
     const pendingEntry = pendingRegistrations.get(tempToken) || pendingRegistration;
@@ -428,7 +428,7 @@ router.post("/verify-2fa", async (req, res) => {
     if (pendingEntry) {
       const now = new Date();
       if (!pendingEntry.code || !pendingEntry.expiresAt || pendingEntry.expiresAt < now || pendingEntry.code !== code) {
-        return res.status(401).json({ message: "Código incorrecto o expirado" });
+        return res.status(401).json({ message: "C?digo incorrecto o expirado" });
       }
 
       const existingUser = await User.findOne({ email: normalizedEmail });
@@ -451,13 +451,13 @@ router.post("/verify-2fa", async (req, res) => {
 
       await user.save();
       pendingRegistrations.delete(tempToken);
-      await recordLog({ req, usuario: user.email, descripcion: "Registro completado tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Registro completado tras verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
       res.cookie("token", token, cookieOptions);
 
       return res.json({
-        message: "Verificación correcta",
+        message: "Verificaci?n correcta",
         token,
         user: {
           id: user._id,
@@ -476,12 +476,12 @@ router.post("/verify-2fa", async (req, res) => {
       }
 
       if (user.twoFactorTempToken !== tempToken) {
-        return res.status(401).json({ message: "Token de verificación inválido" });
+        return res.status(401).json({ message: "Token de verificaci?n inv?lido" });
       }
 
       const now = new Date();
       if (!user.twoFactorCode || !user.twoFactorExpires || user.twoFactorExpires < now || user.twoFactorCode !== code) {
-        return res.status(401).json({ message: "Código incorrecto o expirado" });
+        return res.status(401).json({ message: "C?digo incorrecto o expirado" });
       }
 
       user.password = await bcrypt.hash(pendingChangeEntry.newPassword, 10);
@@ -495,9 +495,9 @@ router.post("/verify-2fa", async (req, res) => {
       await user.save();
       pendingPasswordChanges.delete(tempToken);
 
-      await recordLog({ req, usuario: user.email, descripcion: "Contraseña actualizada tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Contrase?a actualizada tras verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
-      return res.json({ message: "Contraseña actualizada correctamente" });
+      return res.json({ message: "Contrase?a actualizada correctamente" });
     }
 
     if (pendingProfileEntry) {
@@ -507,12 +507,12 @@ router.post("/verify-2fa", async (req, res) => {
       }
 
       if (user.twoFactorTempToken !== tempToken) {
-        return res.status(401).json({ message: "Token de verificación inválido" });
+        return res.status(401).json({ message: "Token de verificaci?n inv?lido" });
       }
 
       const now = new Date();
       if (!user.twoFactorCode || !user.twoFactorExpires || user.twoFactorExpires < now || user.twoFactorCode !== code) {
-        return res.status(401).json({ message: "Código incorrecto o expirado" });
+        return res.status(401).json({ message: "C?digo incorrecto o expirado" });
       }
 
       const payload = pendingProfileEntry.payload || pendingProfileEntry;
@@ -524,7 +524,7 @@ router.post("/verify-2fa", async (req, res) => {
       if (payload.email && normalizeEmail(payload.email) !== normalizeEmail(user.email)) {
         const existingUser = await User.findOne({ email: normalizeEmail(payload.email) });
         if (existingUser) {
-          return res.status(409).json({ message: "El correo ya está registrado por otro usuario." });
+          return res.status(409).json({ message: "El correo ya est? registrado por otro usuario." });
         }
       }
 
@@ -548,7 +548,7 @@ router.post("/verify-2fa", async (req, res) => {
       await user.save();
       pendingProfileUpdates.delete(tempToken);
 
-      await recordLog({ req, usuario: user.email, descripcion: "Perfil actualizado tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Perfil actualizado tras verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       return res.json({ message: "Perfil actualizado correctamente", user: { id: user._id, name: user.name, email: user.email, role: user.role, profileImg: user.profileImg } });
     }
@@ -560,12 +560,12 @@ router.post("/verify-2fa", async (req, res) => {
       }
 
       if (user.twoFactorTempToken !== tempToken) {
-        return res.status(401).json({ message: "Token de verificación inválido" });
+        return res.status(401).json({ message: "Token de verificaci?n inv?lido" });
       }
 
       const now = new Date();
       if (!user.twoFactorCode || !user.twoFactorExpires || user.twoFactorExpires < now || user.twoFactorCode !== code) {
-        return res.status(401).json({ message: "Código incorrecto o expirado" });
+        return res.status(401).json({ message: "C?digo incorrecto o expirado" });
       }
 
       user.password = await bcrypt.hash(newPassword, 10);
@@ -579,13 +579,13 @@ router.post("/verify-2fa", async (req, res) => {
       await user.save();
       pendingPasswordChanges.delete(tempToken);
 
-      await recordLog({ req, usuario: user.email, descripcion: "Contraseña actualizada tras verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Contrase?a actualizada tras verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
       const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
       res.cookie("token", token, cookieOptions);
 
       return res.json({
-        message: "Contraseña actualizada correctamente",
+        message: "Contrase?a actualizada correctamente",
         token,
         user: {
           id: user._id,
@@ -604,20 +604,20 @@ router.post("/verify-2fa", async (req, res) => {
     }
 
     if (user.twoFactorTempToken !== tempToken) {
-      return res.status(401).json({ message: "Token de verificación inválido" });
+      return res.status(401).json({ message: "Token de verificaci?n inv?lido" });
     }
 
     if (isBlocked(user)) {
-      await recordLog({ req, usuario: user.email, descripcion: "Verificación 2FA bloqueada por exceso de intentos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Verificaci?n 2FA bloqueada por exceso de intentos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(403).json({
-        message: "La cuenta está bloqueada temporalmente por demasiados intentos fallidos. Intenta de nuevo en unos minutos."
+        message: "La cuenta est? bloqueada temporalmente por demasiados intentos fallidos. Intenta de nuevo en unos minutos."
       });
     }
 
     if (user.chatBlockedUntil && new Date(user.chatBlockedUntil) > new Date()) {
-      await recordLog({ req, usuario: user.email, descripcion: "Intento de verificación bloqueado por estado de seguridad", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+      await recordLog({ req, usuario: user.email, descripcion: "Intento de verificaci?n bloqueado por estado de seguridad", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
       return res.status(403).json({
-        message: "Tu cuenta está bloqueada por reportes acumulados. Contacta al administrador."
+        message: "Tu cuenta est? bloqueada por reportes acumulados. Contacta al administrador."
       });
     }
 
@@ -631,7 +631,7 @@ router.post("/verify-2fa", async (req, res) => {
         return res.status(403).json({ message: "Demasiados intentos fallidos. Vuelve a intentar en 2 minutos." });
       }
       await user.save();
-      return res.status(401).json({ message: "Código incorrecto o expirado" });
+      return res.status(401).json({ message: "C?digo incorrecto o expirado" });
     }
 
     user.twoFactorCode = null;
@@ -658,7 +658,7 @@ router.post("/verify-2fa", async (req, res) => {
     res.cookie("token", token, cookieOptions);
 
     return res.json({
-      message: "Verificación correcta",
+      message: "Verificaci?n correcta",
       token,
       user: {
         id: user._id,
@@ -677,7 +677,7 @@ router.post("/profile-update-request", verifyToken, async (req, res) => {
   try {
     const payload = req.body;
     if (!payload || typeof payload !== "object") {
-      return res.status(400).json({ message: "Datos de perfil inválidos" });
+      return res.status(400).json({ message: "Datos de perfil inv?lidos" });
     }
 
     const { isValid, errors } = validateProfilePayload(payload);
@@ -693,7 +693,7 @@ router.post("/profile-update-request", verifyToken, async (req, res) => {
     if (payload.email && normalizeEmail(payload.email) !== normalizeEmail(user.email)) {
       const existingUser = await User.findOne({ email: normalizeEmail(payload.email) });
       if (existingUser) {
-        return res.status(409).json({ message: "El correo ya está registrado por otro usuario." });
+        return res.status(409).json({ message: "El correo ya est? registrado por otro usuario." });
       }
     }
 
@@ -707,12 +707,12 @@ router.post("/profile-update-request", verifyToken, async (req, res) => {
       kind: "profile"
     });
 
-    // Fix Bug 1: capturar resultado del envío en profile-update-request.
+    // Fix Bug 1: capturar resultado del env?o en profile-update-request.
     // REVERT: reemplazar por: await sendTwoFactorCode(user, "email", code);
     const profileEmailResult = await sendTwoFactorCode(user, "email", code);
     if (profileEmailResult?.error) {
       pendingProfileUpdates.delete(tempToken);
-      return res.status(502).json({ message: profileEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+      return res.status(502).json({ message: profileEmailResult.message || "No se pudo enviar el c?digo de verificaci?n por correo. Intenta de nuevo." });
     }
     user.twoFactorCode = code;
     user.twoFactorMethod = "email";
@@ -723,7 +723,7 @@ router.post("/profile-update-request", verifyToken, async (req, res) => {
     user.twoFactorBlockedUntil = null;
     await user.save();
 
-    await recordLog({ req, usuario: user.email, descripcion: "Solicitud de actualización de perfil iniciada", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+    await recordLog({ req, usuario: user.email, descripcion: "Solicitud de actualizaci?n de perfil iniciada", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
     return res.json({
       message: "Verifica tu correo para confirmar los cambios del perfil",
@@ -740,11 +740,11 @@ router.post("/change-password-request", verifyToken, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {
-      return res.status(400).json({ message: "Contraseña actual y nueva son requeridas" });
+      return res.status(400).json({ message: "Contrase?a actual y nueva son requeridas" });
     }
 
     if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(String(newPassword))) {
-      return res.status(400).json({ message: "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo." });
+      return res.status(400).json({ message: "La nueva contrase?a debe tener al menos 8 caracteres, una letra, un n?mero y un s?mbolo." });
     }
 
     const user = await User.findById(req.user.id);
@@ -754,7 +754,7 @@ router.post("/change-password-request", verifyToken, async (req, res) => {
 
     const validPassword = await bcrypt.compare(currentPassword, user.password);
     if (!validPassword) {
-      return res.status(401).json({ message: "La contraseña actual es incorrecta" });
+      return res.status(401).json({ message: "La contrase?a actual es incorrecta" });
     }
 
     const code = generateCode();
@@ -767,12 +767,12 @@ router.post("/change-password-request", verifyToken, async (req, res) => {
       kind: "change"
     });
 
-    // Fix Bug 1: capturar resultado del envío en change-password-request.
+    // Fix Bug 1: capturar resultado del env?o en change-password-request.
     // REVERT: reemplazar por: await sendTwoFactorCode(user, "email", code);
     const changePassEmailResult = await sendTwoFactorCode(user, "email", code);
     if (changePassEmailResult?.error) {
       pendingPasswordChanges.delete(tempToken);
-      return res.status(502).json({ message: changePassEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+      return res.status(502).json({ message: changePassEmailResult.message || "No se pudo enviar el c?digo de verificaci?n por correo. Intenta de nuevo." });
     }
     user.twoFactorCode = code;
     user.twoFactorMethod = "email";
@@ -783,10 +783,10 @@ router.post("/change-password-request", verifyToken, async (req, res) => {
     user.twoFactorBlockedUntil = null;
     await user.save();
 
-    await recordLog({ req, usuario: user.email, descripcion: "Solicitud de cambio de contraseña iniciada", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+    await recordLog({ req, usuario: user.email, descripcion: "Solicitud de cambio de contrase?a iniciada", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
     return res.json({
-      message: "Verifica tu correo para confirmar el cambio de contraseña",
+      message: "Verifica tu correo para confirmar el cambio de contrase?a",
       tempToken,
       twoFactorRequired: true
     });
@@ -801,11 +801,11 @@ router.post("/forgot-password", async (req, res) => {
     const normalizedEmail = normalizeEmail(email);
 
     if (!normalizedEmail || !newPassword) {
-      return res.status(400).json({ message: "Correo y nueva contraseña requeridos" });
+      return res.status(400).json({ message: "Correo y nueva contrase?a requeridos" });
     }
 
     if (!/^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/.test(String(newPassword))) {
-      return res.status(400).json({ message: "La nueva contraseña debe tener al menos 8 caracteres, una letra, un número y un símbolo." });
+      return res.status(400).json({ message: "La nueva contrase?a debe tener al menos 8 caracteres, una letra, un n?mero y un s?mbolo." });
     }
 
     const user = await User.findOne({ email: normalizedEmail });
@@ -831,7 +831,7 @@ router.post("/forgot-password", async (req, res) => {
     const emailResult = await sendTwoFactorCode(user, "email", code);
     if (emailResult?.error) {
       pendingPasswordChanges.delete(tempToken);
-      return res.status(502).json({ message: emailResult.message || "No se pudo enviar el código por correo." });
+      return res.status(502).json({ message: emailResult.message || "No se pudo enviar el c?digo por correo." });
     }
 
     user.twoFactorCode = code;
@@ -844,7 +844,7 @@ router.post("/forgot-password", async (req, res) => {
     await user.save();
 
     return res.json({
-      message: "Verifica tu correo para confirmar el cambio de contraseña",
+      message: "Verifica tu correo para confirmar el cambio de contrase?a",
       tempToken,
       twoFactorRequired: true
     });
@@ -949,16 +949,16 @@ router.post("/register", async (req, res) => {
       expiresAt: new Date(now.getTime() + OTP_EXPIRE_MS)
     });
 
-    // Fix Bug 1: el envío se verificaba solo en /login pero no en /register.
-    // Si el correo falla, el usuario quedaba varado en la pantalla de código sin recibirlo.
+    // Fix Bug 1: el env?o se verificaba solo en /login pero no en /register.
+    // Si el correo falla, el usuario quedaba varado en la pantalla de c?digo sin recibirlo.
     // REVERT: reemplazar el bloque completo por: await sendTwoFactorCode({ email: normalizedEmail, name: req.body.name }, "email", code);
     const registerEmailResult = await sendTwoFactorCode({ email: normalizedEmail, name: req.body.name }, "email", code);
     if (registerEmailResult?.error) {
       pendingRegistrations.delete(tempToken);
-      return res.status(502).json({ message: registerEmailResult.message || "No se pudo enviar el código de verificación por correo. Intenta de nuevo." });
+      return res.status(502).json({ message: registerEmailResult.message || "No se pudo enviar el c?digo de verificaci?n por correo. Intenta de nuevo." });
     }
 
-    await recordLog({ req, usuario: normalizedEmail, descripcion: "Registro iniciado con verificación en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
+    await recordLog({ req, usuario: normalizedEmail, descripcion: "Registro iniciado con verificaci?n en dos pasos", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
 
     return res.json({
       message: "Verifica tu correo para completar el registro",

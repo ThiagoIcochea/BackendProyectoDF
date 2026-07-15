@@ -26,7 +26,7 @@ const recordLog = async ({ req, usuario, descripcion, tipo = "SISTEMA", metodo =
   try {
     const payload = {
       ip: ip || normalizeIp(req),
-      usuario: usuario || req?.user?.email || req?.user?.name || "Anónimo",
+      usuario: usuario || req?.user?.email || req?.user?.name || "An?nimo",
       descripcion,
       tipo: normalizeLogType(tipo),
       metodo: metodo || req?.method || "GET",

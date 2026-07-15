@@ -24,7 +24,7 @@ router.post("/", verifyToken, async (req, res) => {
             if (quantity <= 0) continue;
             const productDoc = await Product.findOne({ name: item.name });
             if (!productDoc) {
-                throw new Error(`Producto no encontrado en el catálogo: ${item.name}`);
+                throw new Error(`Producto no encontrado en el cat?logo: ${item.name}`);
             }
             if ((productDoc.stock || 0) < quantity) {
                 throw new Error(`Stock insuficiente para ${item.name}`);
@@ -132,7 +132,7 @@ router.post("/", verifyToken, async (req, res) => {
         const userAgent = req.headers['user-agent'] || "Dispositivo Desconocido";
         const nuevoLog = new Log({
             ip: clientIp,
-            usuario: payment.cliente || "Anónimo",
+            usuario: payment.cliente || "An?nimo",
             descripcion: `Compra registrada - Doc: ${payment.documento || 'N/A'} | Total: S/. ${payment.total}`,
             tipo: "TRANSACCION",
             metodo: req.method,
@@ -143,11 +143,11 @@ router.post("/", verifyToken, async (req, res) => {
         await nuevoLog.save();
         const userDoc = await User.findById(req.user?.id);
         if (userDoc) {
-            await sendOrderUpdateEmail(userDoc, 'Pago registrado en Nendoshop', `Tu compra ha sido registrada correctamente.\n${buildSlaMessage(reactiveDelivery.estimatedDate)}\nTu código de seguimiento es ${reactiveDelivery.trackingCode}.`);
+            await sendOrderUpdateEmail(userDoc, 'Pago registrado en Nendoshop', `Tu compra ha sido registrada correctamente.\n${buildSlaMessage(reactiveDelivery.estimatedDate)}\nTu c?digo de seguimiento es ${reactiveDelivery.trackingCode}.`);
         }
 
         res.json({
-            message: "Pago registrado y auditoría guardada exitosamente",
+            message: "Pago registrado y auditor?a guardada exitosamente",
             delivery: reactiveDelivery,
             slaMessage: buildSlaMessage(reactiveDelivery.estimatedDate)
         });
@@ -167,7 +167,7 @@ router.post("/", verifyToken, async (req, res) => {
                 userAgent: req.headers['user-agent']
             }).save();
         } catch (logError) {
-            console.error("Error crítico: No se pudo guardar el log de error", logError);
+            console.error("Error cr?tico: No se pudo guardar el log de error", logError);
         }
 
         res.status(500).json(error);

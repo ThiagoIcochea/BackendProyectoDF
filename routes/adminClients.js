@@ -145,6 +145,41 @@ router.get("/security/ip-blocks", verifyToken, isAdmin, async (req, res) => {
   }
 });
 
+router.post("/security/ip-blocks/block", verifyToken, isAdmin, async (req, res) => {
+  try {
+    const { ip, reason, durationMinutes = 30 } = req.body;
+    if (!ip) {
+      return res.status(400).json({ message: "La IP es obligatoria" });
+    }
+
+    const blockedUntil = new Date(Date.now() + Math.max(1, Number(durationMinutes) || 30) * 60 * 1000);
+    const block = await LoginIpBlock.findOneAndUpdate(
+      { ip },
+      {
+        $set: {
+          blockedUntil,
+          reason: reason || "Bloqueo manual por administrador",
+          lastAttemptAt: new Date()
+        }
+      },
+      { new: true, upsert: true }
+    );
+
+    await recordLog({
+      req,
+      usuario: req.user?.email || "admin",
+      descripcion: `Bloqueó la IP ${ip}`,
+      tipo: "SISTEMA",
+      metodo: req.method,
+      ruta: req.originalUrl
+    });
+
+    return res.json({ block });
+  } catch (error) {
+    return res.status(500).json({ message: "Error al bloquear IP" });
+  }
+});
+
 router.patch("/security/ip-blocks/:id/unblock", verifyToken, isAdmin, async (req, res) => {
   try {
     const block = await LoginIpBlock.findById(req.params.id);

@@ -21,7 +21,7 @@ router.post("/create-order", verifyToken, async (req, res) => {
         const { total } = req.body;
 
         if (!total || isNaN(total) || total <= 0) {
-            return res.status(400).json({ message: "El monto total de la compra debe ser un número mayor a cero" });
+            return res.status(400).json({ message: "El monto total de la compra debe ser un n?mero mayor a cero" });
         }
 
         const payPalOrder = await createPayPalOrder(total);
@@ -58,7 +58,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
 
         if (captureResult.status !== "COMPLETED") {
             return res.status(400).json({
-                message: "No se pudo capturar el pago. El estado de la transacción no es COMPLETED",
+                message: "No se pudo capturar el pago. El estado de la transacci?n no es COMPLETED",
                 status: captureResult.status
             });
         }
@@ -75,7 +75,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             if (quantity <= 0) continue;
             const productDoc = await Product.findOne({ name: item.name });
             if (!productDoc) {
-                throw new Error(`Producto no encontrado en el catálogo: ${item.name}`);
+                throw new Error(`Producto no encontrado en el cat?logo: ${item.name}`);
             }
             if ((productDoc.stock || 0) < quantity) {
                 throw new Error(`Stock insuficiente para ${item.name}`);
@@ -87,7 +87,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             );
         }
 
-        // Creación reactiva de la orden logística en Delivery asociada al pago
+        // Creaci?n reactiva de la orden log?stica en Delivery asociada al pago
         const reactiveDelivery = new Delivery({
             paymentId: payment._id,
             user: req.user.id,
@@ -109,7 +109,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
 
         await reactiveDelivery.save();
 
-        // Emisión de alertas por WebSockets para productos con descuento
+        // Emisi?n de alertas por WebSockets para productos con descuento
         const discountProducts = (payment.productos || []).filter((item) => {
             const quantity = Number(item.quantity || 0);
             return quantity > 0;
@@ -169,13 +169,13 @@ router.post("/capture-order", verifyToken, async (req, res) => {
             }
         }
 
-        // Registro del log de auditoría
+        // Registro del log de auditor?a
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP Desconocida";
         const userAgent = req.headers['user-agent'] || "Dispositivo Desconocido";
         
         const auditLog = new Log({
             ip: clientIp,
-            usuario: payment.cliente || "Anónimo",
+            usuario: payment.cliente || "An?nimo",
             descripcion: `Compra registrada por PayPal - OrderID: ${orderId} | PagoID: ${payment._id} | Total: $ ${payment.total}`,
             tipo: "TRANSACCION",
             metodo: req.method,
@@ -186,7 +186,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
         await auditLog.save();
 
         return res.status(200).json({
-            message: "Pago de PayPal capturado y registrado con éxito",
+            message: "Pago de PayPal capturado y registrado con ?xito",
             payment
         });
 
@@ -205,7 +205,7 @@ router.post("/capture-order", verifyToken, async (req, res) => {
                 userAgent: req.headers['user-agent']
             }).save();
         } catch (logError) {
-            console.error("Error crítico: No se pudo registrar el log del fallo", logError);
+            console.error("Error cr?tico: No se pudo registrar el log del fallo", logError);
         }
 
         return res.status(500).json({ message: "Error interno al capturar el pago", error: error.message });
