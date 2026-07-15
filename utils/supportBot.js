@@ -895,6 +895,79 @@ const handleClaimRequest = async (text, session) => {
   return null;
 };
 
+const findDeliveryForCancellation = async (orderNumber, userId) => {
+  if (!orderNumber || !userId) return null;
+  const normalizedOrder = String(orderNumber).trim();
+  const query = { user: userId };
+  const looksLikeObjectId = /^[a-f0-9]{24}$/i.test(normalizedOrder);
+  if (looksLikeObjectId) {
+    const byDeliveryId = await Delivery.findOne({ ...query, _id: normalizedOrder }).catch(() => null);
+    if (byDeliveryId) return byDeliveryId;
+  }
+
+  const paymentQuery = looksLikeObjectId
+    ? { $or: [{ documento: normalizedOrder }, { _id: normalizedOrder }] }
+    : { documento: normalizedOrder };
+  const payment = await Payment.findOne(paymentQuery).catch(() => null);
+
+  if (!payment) return null;
+  return Delivery.findOne({ ...query, paymentId: payment._id }).catch(() => null);
+};
+
+const handleCancelOrderRequest = async (text, session) => {
+  if (!session) return null;
+  const normalized = String(text || "").trim();
+  if (!normalized) return null;
+
+  if (session.pendingMfaAction?.type === "cancel_order" && session.pendingMfaAction.status === "waiting_for_order") {
+    const orderNumber = extractOrderNumber(normalized);
+    if (!orderNumber) {
+      return "Claro, necesito el número o ID del pedido que quieres cancelar.";
+    }
+    session.pendingMfaAction = null;
+    return handleCancelOrderRequest(`cancelar pedido ${orderNumber}`, session);
+  }
+
+  if (!/\b(cancelar|cancela|cancelacion|cancelación|anular|anula)\b/i.test(normalized) || !/\b(pedido|orden|compra)\b/i.test(normalized)) {
+    return null;
+  }
+
+  if (!session.userId) {
+    return "Para cancelar un pedido necesito que escribas desde tu cuenta iniciada.";
+  }
+
+  const orderNumber = extractOrderNumber(normalized);
+  if (!orderNumber) {
+    session.pendingMfaAction = { type: "cancel_order", status: "waiting_for_order" };
+    return "Claro, dime el número o ID del pedido que quieres cancelar.";
+  }
+
+  const delivery = await findDeliveryForCancellation(orderNumber, session.userId);
+  if (!delivery) {
+    return "No encontré ese pedido en tu cuenta. Revisa el número o ID y vuelve a enviarlo.";
+  }
+
+  if (!["pending", "ready_for_pickup"].includes(delivery.status)) {
+    return `El pedido ya no se puede cancelar directamente porque está en estado ${delivery.status}. Puedo ayudarte a crear un reclamo para que soporte lo revise.`;
+  }
+
+  const user = await User.findById(session.userId).catch(() => null);
+  if (!user) return "No puedo validar la cancelación sin encontrar tu cuenta.";
+
+  const requestedMethod = extractRequestedMfaMethod(normalized);
+  const mfaResult = await issueActionMfa(user, requestedMethod);
+  session.pendingMfaAction = {
+    type: "cancel_order",
+    status: "waiting_for_code",
+    tempToken: mfaResult.tempToken,
+    deliveryId: delivery._id,
+    method: requestedMethod
+  };
+
+  const methodLabel = requestedMethod === "email" ? "correo" : requestedMethod === "console" ? "consola" : requestedMethod === "call" ? "llamada" : requestedMethod === "whatsapp" ? "WhatsApp" : "SMS";
+  return `Te envié un código MFA por ${methodLabel}. Envíame los 6 dígitos para confirmar la cancelación del pedido.`;
+};
+
 const handleCheckoutRequest = async (text, session) => {
   if (!session?.userId) return null;
 

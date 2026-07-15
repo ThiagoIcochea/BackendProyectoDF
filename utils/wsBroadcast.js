@@ -98,7 +98,16 @@ const handleClientMessage = async (socket, message) => {
     return;
   }
 
-  const { type, roomKey, text, username, userId, profileImg } = message;
+  const rawType = String(message.type || "").trim();
+  const typeAliases = {
+    "join-room": "join",
+    "room-join": "join",
+    "chat-message": "message",
+    "send-message": "message",
+    "new-message": "message"
+  };
+  const type = typeAliases[rawType] || rawType;
+  const { roomKey, text, username, userId, profileImg } = message;
 
   if (type === "join") {
     socket.roomKey = String(roomKey || socket.roomKey || "").trim();
@@ -267,6 +276,12 @@ const handleClientMessage = async (socket, message) => {
     return;
   }
 
+  if (type === "subscribe") {
+    socket.productId = message.productId || socket.productId || null;
+    socket.send(JSON.stringify({ type: "subscribed", productId: socket.productId }));
+    return;
+  }
+
   socket.send(JSON.stringify({ type: "error", message: "Tipo de mensaje no reconocido." }));
 };
 
@@ -284,7 +299,9 @@ const broadcastPurchaseAlert = (payload) => {
 const broadcastCommentUpdate = (productId, comments) => {
   if (!wss) return;
   wss.clients.forEach((client) => {
-    client.send(JSON.stringify({ type: "comment-update", productId, comments }));
+    if (!client.productId || String(client.productId) === String(productId)) {
+      client.send(JSON.stringify({ type: "comment-update", productId, comments }));
+    }
   });
 };
 

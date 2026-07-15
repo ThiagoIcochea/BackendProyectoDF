@@ -8,6 +8,7 @@ const verifyToken = require("../middlewares/verifyToken");
 const isAdmin = require("../middlewares/isAdmin");
 const { recordLog } = require("../utils/logger");
 const { validateAdminClientField } = require("../utils/validation");
+const { issueActionMfa, verifyActionMfa } = require("../utils/twoFactor");
 
 router.get("/", verifyToken, isAdmin, async (req, res) => {
  const users = await User.find();
@@ -111,10 +112,34 @@ router.patch("/:id/password", verifyToken, isAdmin, async (req, res) => {
 
 router.patch("/:id/block", verifyToken, isAdmin, async (req, res) => {
   try {
-    const { blocked, reason } = req.body;
+    const { blocked, reason, mfaCode, tempToken, method } = req.body;
     const user = await User.findById(req.params.id);
 
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    const adminUser = await User.findById(req.user.id);
+    if (!adminUser) return res.status(404).json({ message: "Administrador no encontrado." });
+
+    if (!mfaCode || !tempToken) {
+      const normalizedMethod = String(method || "email").toLowerCase();
+      const safeMethod = ["email", "sms", "call", "whatsapp", "console"].includes(normalizedMethod) ? normalizedMethod : "email";
+      const mfaResult = await issueActionMfa(adminUser, safeMethod);
+      if (mfaResult?.error) {
+        return res.status(502).json({ message: mfaResult.message || "No se pudo enviar el código MFA." });
+      }
+
+      return res.status(202).json({
+        twoFactorRequired: true,
+        tempToken: mfaResult.tempToken,
+        method: safeMethod,
+        message: blocked ? "Te enviamos un código MFA para confirmar el bloqueo." : "Te enviamos un código MFA para confirmar el desbloqueo."
+      });
+    }
+
+    const mfaOk = await verifyActionMfa(adminUser, tempToken, mfaCode);
+    if (!mfaOk) {
+      return res.status(401).json({ message: "Código MFA incorrecto o expirado." });
+    }
 
     user.chatBlockedUntil = blocked ? new Date(Date.now() + 1000 * 60 * 60 * 24 * 30) : null;
     user.chatBlockReason = blocked ? reason || "Reporte acumulado" : "";
