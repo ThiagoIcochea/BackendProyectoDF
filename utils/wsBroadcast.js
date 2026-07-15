@@ -92,14 +92,18 @@ const persistMessage = async ({ roomKey, userId, username, text, profileImg, rol
 
 const handleClientMessage = async (socket, message) => {
   if (!message || typeof message !== "object") return;
+  if (!socket?.authenticated) {
+    socket?.send(JSON.stringify({ type: "error", message: "Debes iniciar sesión para usar el chat." }));
+    return;
+  }
 
   const { type, roomKey, text, username, userId, profileImg } = message;
 
   if (type === "join") {
     socket.roomKey = roomKey || socket.roomKey;
-    socket.username = username || socket.username || "Usuario";
-    socket.userId = userId || socket.userId || socket.id;
-    socket.profileImg = profileImg || socket.profileImg || "";
+    socket.username = socket.username || username || "Usuario";
+    socket.userId = socket.userId || userId || socket.id;
+    socket.profileImg = socket.profileImg || profileImg || "";
 
     if (socket.roomKey) {
       addUserToRoom(socket, socket.roomKey);
@@ -215,10 +219,10 @@ const handleClientMessage = async (socket, message) => {
 
     const savedMessage = await persistMessage({
       roomKey,
-      userId: userId || socket.userId || null,
-      username: username || socket.username || "Usuario",
+      userId: socket.userId || userId || null,
+      username: socket.username || username || "Usuario",
       text: normalizedText,
-      profileImg: profileImg || socket.profileImg || "",
+      profileImg: socket.profileImg || profileImg || "",
       role: "user",
       meta: messageMeta
     });
@@ -226,7 +230,7 @@ const handleClientMessage = async (socket, message) => {
 
     if (roomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
-      session.userId = userId || socket.userId || session.userId || null;
+      session.userId = socket.userId || userId || session.userId || null;
       if (Array.isArray(message.cartItems)) {
         session.cartItems = message.cartItems.map((item) => ({
           id: item.id || item._id || item.name,

@@ -15,7 +15,7 @@ const LogSchema = new mongoose.Schema({
     },
     tipo: { 
         type: String, 
-        enum: ["TRANSACCION", "ERROR", "SISTEMA", "AUTH", "PEDIDO", "RECLAMO", "CARRITO", "PRODUCTO"], 
+        enum: ["TRANSACCION", "ERROR", "SISTEMA", "AUTH", "PEDIDO", "RECLAMO", "CARRITO", "PRODUCTO", "WEBSOCKET"], 
         required: true 
     },
     metodo: {

@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 const http = require("http");
 const express = require("express");
 const mongoose = require("mongoose");
@@ -6,6 +6,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { WebSocketServer } = require("ws");
 const wsBroadcast = require("./utils/wsBroadcast");
+const { authenticateWebSocketRequest } = require("./utils/wsAuth");
 const authRoutes = require("./routes/authRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const ChatRoom = require("./models/ChatRoom");
@@ -91,10 +92,45 @@ app.use("/api/claims", require("./routes/claims"));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-wss.on("connection", (socket) => {
+wss.on("connection", async (socket, req) => {
+  const auth = await authenticateWebSocketRequest(req);
   socket.isAlive = true;
   socket.roomKey = null;
   socket.username = null;
+  socket.userId = null;
+  socket.profileImg = "";
+  socket.authenticated = false;
+  socket.clientIp = auth.ip;
+
+  if (!auth.authorized) {
+    await recordLog({
+      ip: auth.ip,
+      usuario: auth.user?.email || "Anónimo",
+      descripcion: `Conexión WebSocket rechazada (${auth.reason})`,
+      tipo: "WEBSOCKET",
+      metodo: "WS",
+      ruta: "/ws"
+    }).catch(() => { });
+
+    socket.close(1008, "No autorizado");
+    return;
+  }
+
+  socket.authenticated = true;
+  socket.userId = auth.user.id;
+  socket.username = auth.user.name;
+  socket.profileImg = auth.user.profileImg || "";
+  socket.userEmail = auth.user.email;
+  socket.userRole = auth.user.role;
+
+  await recordLog({
+    ip: auth.ip,
+    usuario: auth.user.email,
+    descripcion: "Conexión WebSocket autenticada",
+    tipo: "WEBSOCKET",
+    metodo: "WS",
+    ruta: "/ws"
+  }).catch(() => { });
 
   socket.on("pong", () => {
     socket.isAlive = true;
@@ -146,6 +182,14 @@ wss.on("connection", (socket) => {
 
   socket.on("close", () => {
     wsBroadcast.handleClientDisconnect(socket);
+    recordLog({
+      ip: socket.clientIp,
+      usuario: socket.userEmail || socket.username || "Anónimo",
+      descripcion: "Conexión WebSocket cerrada",
+      tipo: "WEBSOCKET",
+      metodo: "WS",
+      ruta: "/ws"
+    }).catch(() => { });
   });
 });
 

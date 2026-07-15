@@ -17,7 +17,7 @@ const normalizeUserAgent = (reqOrUserAgent) => {
 
 const normalizeLogType = (value) => {
   const normalized = String(value || "SISTEMA").trim().toUpperCase();
-  return ["TRANSACCION", "ERROR", "SISTEMA", "AUTH", "PEDIDO", "RECLAMO", "CARRITO", "PRODUCTO"].includes(normalized)
+  return ["TRANSACCION", "ERROR", "SISTEMA", "AUTH", "PEDIDO", "RECLAMO", "CARRITO", "PRODUCTO", "WEBSOCKET"].includes(normalized)
     ? normalized
     : "SISTEMA";
 };

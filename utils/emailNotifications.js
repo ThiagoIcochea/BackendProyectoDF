@@ -1,18 +1,18 @@
-const { Resend } = require('resend');
+const { Resend } = require("resend");
 
 const resendApiKey = process.env.RESEND_API_KEY;
 const resendClient = resendApiKey ? new Resend(resendApiKey) : null;
 
 const getFromAddress = () => {
-  const raw = (process.env.RESEND_FROM_EMAIL || '').trim();
-  if (raw && raw.includes('@')) return raw;
-  return 'onboarding@resend.dev';
+  const raw = (process.env.RESEND_FROM_EMAIL || "").trim();
+  if (raw && raw.includes("@")) return raw;
+  return "onboarding@resend.dev";
 };
 
 const getFallbackFromAddress = () => {
-  const raw = (process.env.RESEND_FALLBACK_FROM_EMAIL || '').trim();
-  if (raw && raw.includes('@')) return raw;
-  return 'onboarding@resend.dev';
+  const raw = (process.env.RESEND_FALLBACK_FROM_EMAIL || "").trim();
+  if (raw && raw.includes("@")) return raw;
+  return "onboarding@resend.dev";
 };
 
 const buildSendPayload = ({ from, to, subject, text, html }) => ({
@@ -24,47 +24,75 @@ const buildSendPayload = ({ from, to, subject, text, html }) => ({
 });
 
 const sendEmail = async ({ to, subject, text, html }) => {
-  if (!to) return { sent: false, reason: 'missing_email' };
+  if (!to) return { sent: false, reason: "missing_email" };
 
   if (!resendClient) {
     console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
-    return { sent: true, fallback: true, reason: 'missing_resend', message: 'Se registró el mensaje en consola porque Resend no está configurado.' };
+    return {
+      sent: true,
+      fallback: true,
+      reason: "missing_resend",
+      message: "Se registró el mensaje en consola porque Resend no está configurado."
+    };
   }
 
   try {
     const from = getFromAddress();
-    const { data, error } = await resendClient.emails.send(buildSendPayload({ from, to, subject, text, html }));
+    const { data, error } = await resendClient.emails.send(
+      buildSendPayload({ from, to, subject, text, html })
+    );
 
     if (error) {
-      console.error('[email] resend error', error);
+      console.error("[email] resend error", error);
       console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
 
       const fallbackFrom = getFallbackFromAddress();
       if (fallbackFrom !== from) {
-        const retry = await resendClient.emails.send(buildSendPayload({ from: fallbackFrom, to, subject, text, html }));
+        const retry = await resendClient.emails.send(
+          buildSendPayload({ from: fallbackFrom, to, subject, text, html })
+        );
+
         if (!retry?.error) {
-          return { sent: true, fallback: true, reason: 'sender_fallback', id: retry?.data?.id, from: fallbackFrom };
+          return {
+            sent: true,
+            fallback: true,
+            reason: "sender_fallback",
+            id: retry?.data?.id,
+            from: fallbackFrom
+          };
         }
       }
 
-      return { sent: false, fallback: true, reason: 'resend_error', message: 'Resend rechazó el envío. Revisa que el dominio o remitente estén verificados en tu cuenta.' };
+      return {
+        sent: false,
+        fallback: true,
+        reason: "resend_error",
+        message:
+          "Resend rechazó el envío. Revisa que el dominio o remitente estén verificados en tu cuenta."
+      };
     }
 
     return { sent: true, id: data?.id, fallback: false };
   } catch (error) {
-    console.error('[email] send failure', error);
+    console.error("[email] send failure", error);
     console.log(`[email][fallback] ${subject} -> ${to}: ${text}`);
-    return { sent: false, fallback: true, reason: 'exception', message: error?.message || 'No se pudo enviar el correo. Se registró en consola para continuar el flujo.' };
+    return {
+      sent: false,
+      fallback: true,
+      reason: "exception",
+      message:
+        error?.message || "No se pudo enviar el correo. Se registró en consola para continuar el flujo."
+    };
   }
 };
 
 const sendOrderUpdateEmail = async (user, subject, message) => {
-  if (!user?.email) return { sent: false, reason: 'missing_email' };
+  if (!user?.email) return { sent: false, reason: "missing_email" };
   return sendEmail({
     to: user.email,
     subject,
     text: message,
-    html: `<p>${message.replace(/\n/g, '<br />')}</p>`
+    html: `<p>${message.replace(/\n/g, "<br />")}</p>`
   });
 };
 
@@ -72,12 +100,12 @@ const sendVerificationCodeEmail = async (
   user,
   code,
   {
-    subject = 'Código de verificación - Nendoshop',
-    title = 'Verificación de seguridad',
-    description = 'Tu código de verificación es:'
+    subject = "Código de verificación - Nendoshop",
+    title = "Verificación de seguridad",
+    description = "Tu código de verificación es:"
   } = {}
 ) => {
-  if (!user?.email) return { sent: false, reason: 'missing_email' };
+  if (!user?.email) return { sent: false, reason: "missing_email" };
 
   const html = `
     <div style="font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;">
@@ -101,4 +129,9 @@ const sendVerificationCodeEmail = async (
   });
 };
 
-module.exports = { getFromAddress, sendOrderUpdateEmail, sendVerificationCodeEmail, sendEmail };
+module.exports = {
+  getFromAddress,
+  sendOrderUpdateEmail,
+  sendVerificationCodeEmail,
+  sendEmail
+};
