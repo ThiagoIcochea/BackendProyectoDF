@@ -815,7 +815,7 @@ router.post("/forgot-password", async (req, res) => {
 
     if (user.role === "admin") {
       await recordLog({ req, usuario: user.email, descripcion: "Recuperacion admin bloqueada desde login general", tipo: "AUTH", metodo: req.method, ruta: req.originalUrl });
-      return res.status(403).json({ message: "La contrasena de administrador solo se recupera desde access-panel-admin." });
+      return res.status(403).json({ message: "No se ha podido proceder con su solicitud." });
     }
 
     const code = generateCode();
