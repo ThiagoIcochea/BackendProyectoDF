@@ -7,6 +7,7 @@ const verifyToken = require("../middlewares/verifyToken");
 const { createSupportSession, getSupportBotReply, normalizeCustomerName } = require("../utils/supportBot");
 const ChatMessage = require("../models/ChatMessage");
 const ChatRoom = require("../models/ChatRoom");
+const { normalizeSpanishText } = require("../utils/textEncoding");
 
 const sessions = new Map();
 
@@ -62,8 +63,8 @@ const persistSupportBotMessage = async ({ roomKey, userId, username, text, role 
 
   const payload = {
     roomKey,
-    username: String(username || "cliente").trim() || "cliente",
-    text: String(text || "").trim(),
+    username: normalizeSpanishText(String(username || "cliente").trim() || "cliente"),
+    text: normalizeSpanishText(String(text || "").trim()),
     role,
     meta
   };
@@ -104,7 +105,7 @@ router.post("/message", verifyToken, async (req, res) => {
       meta: { sessionId: activeSessionKey }
     });
 
-    const reply = await getSupportBotReply(message, session);
+    const reply = normalizeSpanishText(await getSupportBotReply(message, session));
 
     await persistSupportBotMessage({
       roomKey,

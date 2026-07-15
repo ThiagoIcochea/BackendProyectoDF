@@ -4,6 +4,7 @@ const User = require("../models/User");
 const ChatReport = require("../models/ChatReport");
 const { buildSupportBotReply, createSupportSession, moderateCommunityMessage, checkTextSafety, analyzeReportWithGroq } = require("./supportBot");
 const { recordLog } = require("../utils/logger");
+const { normalizeSpanishText } = require("./textEncoding");
 
 let wss = null;
 const roomUsers = new Map();
@@ -81,8 +82,8 @@ const persistMessage = async ({ roomKey, userId, username, text, profileImg, rol
   const message = await ChatMessage.create({
     roomKey,
     userId,
-    username,
-    text,
+    username: normalizeSpanishText(username),
+    text: normalizeSpanishText(text),
     profileImg,
     role,
     meta
@@ -100,7 +101,7 @@ const handleClientMessage = async (socket, message) => {
   const { type, roomKey, text, username, userId, profileImg } = message;
 
   if (type === "join") {
-    socket.roomKey = roomKey || socket.roomKey;
+    socket.roomKey = String(roomKey || socket.roomKey || "").trim();
     socket.username = socket.username || username || "Usuario";
     socket.userId = socket.userId || userId || socket.id;
     socket.profileImg = socket.profileImg || profileImg || "";
@@ -195,13 +196,21 @@ const handleClientMessage = async (socket, message) => {
     return;
   }
 
-  if (type === "message" && roomKey) {
+  if (type === "message") {
+    const safeRoomKey = String(roomKey || socket.roomKey || "").trim();
     const normalizedText = String(text || "").trim();
-    if (!normalizedText) return;
+    if (!safeRoomKey) {
+      socket.send(JSON.stringify({ type: "error", message: "Selecciona una sala de chat válida." }));
+      return;
+    }
+    if (!normalizedText) {
+      socket.send(JSON.stringify({ type: "error", message: "El mensaje no puede estar vacío." }));
+      return;
+    }
 
     let messageMeta = {};
 
-    if (roomKey === "community") {
+    if (safeRoomKey === "community") {
       const moderation = await moderateCommunityMessage(normalizedText);
 
       if (!moderation.allowed) {
@@ -218,7 +227,7 @@ const handleClientMessage = async (socket, message) => {
     }
 
     const savedMessage = await persistMessage({
-      roomKey,
+      roomKey: safeRoomKey,
       userId: socket.userId || userId || null,
       username: socket.username || username || "Usuario",
       text: normalizedText,
@@ -226,9 +235,9 @@ const handleClientMessage = async (socket, message) => {
       role: "user",
       meta: messageMeta
     });
-    broadcastToRoom(roomKey, { type: "room-message", message: savedMessage });
+    broadcastToRoom(safeRoomKey, { type: "room-message", message: savedMessage });
 
-    if (roomKey.startsWith("support")) {
+    if (safeRoomKey.startsWith("support")) {
       const session = socket.supportSession || createSupportSession(socket.username || "cliente");
       session.userId = socket.userId || userId || session.userId || null;
       if (Array.isArray(message.cartItems)) {
@@ -242,20 +251,23 @@ const handleClientMessage = async (socket, message) => {
       }
       socket.supportSession = session;
 
-      const replyText = await buildSupportBotReply(normalizedText, session);
+      const replyText = normalizeSpanishText(await buildSupportBotReply(normalizedText, session));
       const botMeta = session.lastBotMeta || null;
       session.lastBotMeta = null;
       const assistantMessage = await persistMessage({
-        roomKey,
+        roomKey: safeRoomKey,
         username: "NendoBot",
         text: String(replyText || "").trim() || "Gracias por tu mensaje. Estoy aquí para ayudarte.",
         profileImg: "",
         role: "assistant",
         meta: botMeta ? { action: botMeta } : {}
       });
-      broadcastToRoom(roomKey, { type: "room-message", message: assistantMessage });
+      broadcastToRoom(safeRoomKey, { type: "room-message", message: assistantMessage });
     }
+    return;
   }
+
+  socket.send(JSON.stringify({ type: "error", message: "Tipo de mensaje no reconocido." }));
 };
 
 const handleClientDisconnect = (socket) => {

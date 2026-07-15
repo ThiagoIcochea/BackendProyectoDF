@@ -1732,8 +1732,8 @@ const fallbackReportClassification = (reason, hasMessages) => {
     block: false,
     category: "apropiado",
     reason: hasMessages
-      ? "Moderaci?n de reporte fall? (fallback seguro)"
-      : "El usuario no enviÃ³ mensajes hoy para ser evaluados."
+      ? "Moderación de reporte falló (fallback seguro)"
+      : "El usuario no envió mensajes hoy para ser evaluados."
   };
 };
 

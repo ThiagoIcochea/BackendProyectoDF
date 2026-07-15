@@ -11,6 +11,7 @@ const authRoutes = require("./routes/authRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const ChatRoom = require("./models/ChatRoom");
 const { recordLog } = require("./utils/logger");
+const { normalizeJsonPayload } = require("./utils/textEncoding");
 
 const PORT = process.env.PORT || 4000;
 
@@ -21,9 +22,24 @@ dns.setServers([
   '8.8.8.8',
 ]);
 
-app.use(express.json());
+app.use(express.json({ type: ["application/json", "application/*+json"] }));
 
 app.use(cookieParser());
+
+app.use((req, res, next) => {
+  res.charset = "utf-8";
+  res.setHeader("X-Content-Type-Options", "nosniff");
+
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => {
+    if (!res.getHeader("Content-Type")) {
+      res.type("application/json; charset=utf-8");
+    }
+    return originalJson(normalizeJsonPayload(payload));
+  };
+
+  next();
+});
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -137,8 +153,8 @@ wss.on("connection", async (socket, req) => {
   });
 
   socket.on("message", async (rawMessage) => {
+    let message = null;
     try {
-      let message = rawMessage;
       if (Buffer.isBuffer(rawMessage)) {
         const text = rawMessage.toString("utf8").trim();
         if (!text) {
@@ -172,11 +188,20 @@ wss.on("connection", async (socket, req) => {
       if (!message || typeof message !== "object") {
         return;
       }
-
-      await wsBroadcast.handleClientMessage(socket, message);
     } catch (error) {
       console.error("WS message parse error:", error.message || error);
       socket.send(JSON.stringify({ type: "error", message: "Formato de mensaje inválido" }));
+      return;
+    }
+
+    try {
+      await wsBroadcast.handleClientMessage(socket, message);
+    } catch (error) {
+      console.error("WS message processing error:", error.message || error);
+      socket.send(JSON.stringify({
+        type: "error",
+        message: "No se pudo procesar tu mensaje. Inténtalo nuevamente."
+      }));
     }
   });
 

@@ -1,4 +1,5 @@
 const { Resend } = require("resend");
+const { normalizeSpanishText } = require("./textEncoding");
 
 const resendApiKey = process.env.RESEND_API_KEY;
 const resendClient = resendApiKey ? new Resend(resendApiKey) : null;
@@ -20,9 +21,9 @@ const normalizeText = (value) => String(value || "").replace(/\r\n/g, "\n").repl
 const buildSendPayload = ({ from, to, subject, text, html }) => ({
   from,
   to: [to],
-  subject: normalizeText(subject),
-  text: normalizeText(text),
-  html: normalizeText(html)
+  subject: normalizeText(normalizeSpanishText(subject)),
+  text: normalizeText(normalizeSpanishText(text)),
+  html: normalizeText(normalizeSpanishText(html))
 });
 
 const sendEmail = async ({ to, subject, text, html }) => {
