@@ -22,28 +22,36 @@ const getRoomMembers = (roomKey) => {
 const broadcastToRoom = (roomKey, payload, excludeSocket = null) => {
   if (!wss) return;
   wss.clients.forEach((client) => {
-    if (client.roomKey === roomKey && client !== excludeSocket) {
+    if (client.roomKey === roomKey && client !== excludeSocket && client.readyState === 1) {
       client.send(JSON.stringify(payload));
     }
   });
 };
 
 const broadcastRoomUsers = (roomKey) => {
-  const users = getRoomMembers(roomKey).map((user) => ({
-    id: user.id,
-    username: user.username,
-    profileImg: user.profileImg || "",
-    online: true
-  }));
+  const usersById = new Map();
+  getRoomMembers(roomKey).forEach((user) => {
+    const id = user.userId || user.id;
+    if (!id || usersById.has(id)) return;
+    usersById.set(id, {
+      id,
+      username: user.username,
+      profileImg: user.profileImg || "",
+      online: true
+    });
+  });
+  const users = Array.from(usersById.values());
   broadcastToRoom(roomKey, { type: "room-users", users });
 };
 
 const addUserToRoom = (socket, roomKey) => {
   if (!roomKey) return;
   const current = getRoomMembers(roomKey);
-  const next = current.filter((user) => user.id !== socket.userId);
+  const next = current.filter((user) => user.socketId !== socket.id);
   next.push({
     id: socket.userId || socket.id,
+    userId: socket.userId || socket.id,
+    socketId: socket.id,
     username: socket.username || "Usuario",
     profileImg: socket.profileImg || ""
   });
@@ -54,7 +62,7 @@ const addUserToRoom = (socket, roomKey) => {
 const removeUserFromRoom = (socket) => {
   if (!socket?.roomKey) return;
   const current = getRoomMembers(socket.roomKey);
-  const next = current.filter((user) => user.id !== (socket.userId || socket.id));
+  const next = current.filter((user) => user.socketId !== socket.id);
   if (next.length) {
     roomUsers.set(socket.roomKey, next);
   } else {
@@ -118,7 +126,11 @@ const handleClientMessage = async (socket, message) => {
   const { roomKey, text, username, userId, profileImg } = message;
 
   if (type === "join") {
-    socket.roomKey = normalizeRoomKeyForSocket(socket, roomKey || socket.roomKey);
+    const nextRoomKey = normalizeRoomKeyForSocket(socket, roomKey || socket.roomKey);
+    if (socket.roomKey && socket.roomKey !== nextRoomKey) {
+      removeUserFromRoom(socket);
+    }
+    socket.roomKey = nextRoomKey;
     socket.username = socket.username || username || "Usuario";
     socket.userId = socket.userId || userId || socket.id;
     socket.profileImg = socket.profileImg || profileImg || "";

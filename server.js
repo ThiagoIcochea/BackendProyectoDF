@@ -1,5 +1,6 @@
 ﻿require("dotenv").config();
 const http = require("http");
+const crypto = require("crypto");
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -109,50 +110,15 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", async (socket, req) => {
-  const auth = await authenticateWebSocketRequest(req);
-  socket.isAlive = true;
-  socket.roomKey = null;
-  socket.username = null;
-  socket.userId = null;
-  socket.profileImg = "";
-  socket.authenticated = false;
-  socket.clientIp = auth.ip;
+  const queuedMessages = [];
+  let authReady = false;
 
-  if (!auth.authorized) {
-    await recordLog({
-      ip: auth.ip,
-      usuario: auth.user?.email || "Anónimo",
-      descripcion: `Conexión WebSocket rechazada (${auth.reason})`,
-      tipo: "WEBSOCKET",
-      metodo: "WS",
-      ruta: "/ws"
-    }).catch(() => { });
+  const handleRawMessage = async (rawMessage) => {
+    if (!authReady) {
+      queuedMessages.push(rawMessage);
+      return;
+    }
 
-    socket.close(1008, "No autorizado");
-    return;
-  }
-
-  socket.authenticated = true;
-  socket.userId = auth.user.id;
-  socket.username = auth.user.name;
-  socket.profileImg = auth.user.profileImg || "";
-  socket.userEmail = auth.user.email;
-  socket.userRole = auth.user.role;
-
-  await recordLog({
-    ip: auth.ip,
-    usuario: auth.user.email,
-    descripcion: "Conexión WebSocket autenticada",
-    tipo: "WEBSOCKET",
-    metodo: "WS",
-    ruta: "/ws"
-  }).catch(() => { });
-
-  socket.on("pong", () => {
-    socket.isAlive = true;
-  });
-
-  socket.on("message", async (rawMessage) => {
     let message = null;
     try {
       if (Buffer.isBuffer(rawMessage)) {
@@ -203,7 +169,58 @@ wss.on("connection", async (socket, req) => {
         message: "No se pudo procesar tu mensaje. Inténtalo nuevamente."
       }));
     }
+  };
+
+  socket.on("message", handleRawMessage);
+
+  const auth = await authenticateWebSocketRequest(req);
+  socket.isAlive = true;
+  socket.id = crypto.randomUUID();
+  socket.roomKey = null;
+  socket.username = null;
+  socket.userId = null;
+  socket.profileImg = "";
+  socket.authenticated = false;
+  socket.clientIp = auth.ip;
+
+  if (!auth.authorized) {
+    await recordLog({
+      ip: auth.ip,
+      usuario: auth.user?.email || "Anónimo",
+      descripcion: `Conexión WebSocket rechazada (${auth.reason})`,
+      tipo: "WEBSOCKET",
+      metodo: "WS",
+      ruta: "/ws"
+    }).catch(() => { });
+
+    socket.close(1008, "No autorizado");
+    return;
+  }
+
+  socket.authenticated = true;
+  socket.userId = auth.user.id;
+  socket.username = auth.user.name;
+  socket.profileImg = auth.user.profileImg || "";
+  socket.userEmail = auth.user.email;
+  socket.userRole = auth.user.role;
+
+  await recordLog({
+    ip: auth.ip,
+    usuario: auth.user.email,
+    descripcion: "Conexión WebSocket autenticada",
+    tipo: "WEBSOCKET",
+    metodo: "WS",
+    ruta: "/ws"
+  }).catch(() => { });
+
+  socket.on("pong", () => {
+    socket.isAlive = true;
   });
+
+  authReady = true;
+  while (queuedMessages.length) {
+    await handleRawMessage(queuedMessages.shift());
+  }
 
   socket.on("close", () => {
     wsBroadcast.handleClientDisconnect(socket);
