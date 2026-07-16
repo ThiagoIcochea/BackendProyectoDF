@@ -17,6 +17,22 @@ const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = requ
 const { recordLog } = require("../utils/logger");
 const { issueActionMfa, verifyActionMfa } = require("../utils/twoFactor");
 
+const shouldHaveDeliveryCode = (status) => ["ready_for_pickup", "shipped"].includes(String(status || "").toLowerCase());
+
+const ensureCodesForVisibleOrders = async (orders) => {
+    const list = Array.isArray(orders) ? orders : [];
+    const updates = list
+        .filter((delivery) => shouldHaveDeliveryCode(delivery.status) && !String(delivery.deliveryCode || "").trim())
+        .map(async (delivery) => {
+            ensureDeliveryCode(delivery);
+            await delivery.save();
+        });
+    if (updates.length) {
+        await Promise.all(updates);
+    }
+    return orders;
+};
+
 const restockPaymentProducts = async (paymentId, session = null) => {
     const paymentQuery = Payment.findById(paymentId);
     const payment = session ? await paymentQuery.session(session) : await paymentQuery;
@@ -130,6 +146,7 @@ router.get("/", verifyToken, isAdmin, async (req, res) => {
         const deliveries = await Delivery.find()
             .populate("paymentId")
             .sort({ createdAt: -1 });
+        await ensureCodesForVisibleOrders(deliveries);
         return res.json(deliveries);
     } catch (error) {
         return res.status(500).json({ error: error.message });
@@ -147,6 +164,7 @@ router.get("/my-orders", verifyToken, async (req, res) => {
         const orders = await Delivery.find({ user: userId })
             .populate("paymentId")
             .sort({ createdAt: -1 });
+        await ensureCodesForVisibleOrders(orders);
 
         return res.json(orders);
     } catch (error) {
@@ -227,7 +245,7 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
                 return res.status(400).json({ message: "Estado de entrega inválido." });
             }
             const previousStatus = delivery.status;
-            if (["ready_for_pickup", "shipped"].includes(status)) {
+            if (shouldHaveDeliveryCode(status)) {
                 ensureDeliveryCode(delivery);
             }
             delivery.status = status;
@@ -310,7 +328,7 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             }
         }
 
-        if (["ready_for_pickup", "shipped"].includes(status)) {
+        if (shouldHaveDeliveryCode(status)) {
             ensureDeliveryCode(delivery);
         }
 

@@ -37,6 +37,7 @@ const broadcastRoomUsers = (roomKey) => {
       id,
       username: user.username,
       profileImg: user.profileImg || "",
+      role: user.role || "user",
       online: true
     });
   });
@@ -53,7 +54,8 @@ const addUserToRoom = (socket, roomKey) => {
     userId: socket.userId || socket.id,
     socketId: socket.id,
     username: socket.username || "Usuario",
-    profileImg: socket.profileImg || ""
+    profileImg: socket.profileImg || "",
+    role: socket.userRole || "user"
   });
   roomUsers.set(roomKey, next);
   broadcastRoomUsers(roomKey);
@@ -162,6 +164,19 @@ const handleClientMessage = async (socket, message) => {
     const reporterId = mongoose.Types.ObjectId.isValid(socket.userId) ? socket.userId : null;
 
     if (reporterId) {
+      if (String(reporterId) === String(targetUser._id)) {
+        socket.send(JSON.stringify({ type: "error", message: "No puedes reportarte a ti mismo." }));
+        return;
+      }
+
+      const reporterUser = await User.findById(reporterId).select("role email name");
+      const reporterRole = reporterUser?.role || socket.userRole || "user";
+      const targetRole = targetUser.role || "user";
+      if (targetRole === "admin" && reporterRole !== "admin") {
+        socket.send(JSON.stringify({ type: "error", message: "Solo un administrador puede reportar a otro administrador." }));
+        return;
+      }
+
       // Verificar si el reportero actual ya reportó al mismo usuario el día de hoy
       const existingReport = await ChatReport.findOne({
         reporterId,

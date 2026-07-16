@@ -211,7 +211,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
       }[delivery.status] || delivery.status;
 
       const userDoc = await User.findById(claim.user).session(session);
-      await sendOrderUpdateEmail(userDoc, 'Actualización de tu reclamo', `Tu reclamo ha sido ${claim.status === 'resolved' ? 'resuelto' : 'actualizado'}.\n${resolution || 'Revisa la información en tu pedido.'}\nEstado del pedido: ${statusLabel}.`);
+      await sendOrderUpdateEmail(userDoc, 'Actualización de tu reclamo', `Tu reclamo ha sido ${claim.status === 'resolved' ? 'resuelto' : 'actualizado'}.\n${resolution || 'Revisa la información en tu pedido.'}\nEstado del pedido: ${statusLabel}.\n${delivery.deliveryCode ? `Código de confirmación: ${delivery.deliveryCode}` : ''}`);
     }
 
     res.json({ message: 'Reclamo actualizado correctamente.', claim, delivery });

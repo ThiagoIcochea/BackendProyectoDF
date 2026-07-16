@@ -172,9 +172,35 @@ router.get("/security/ip-blocks", verifyToken, isAdmin, async (req, res) => {
 
 router.post("/security/ip-blocks/block", verifyToken, isAdmin, async (req, res) => {
   try {
-    const { ip, reason, durationMinutes = 30 } = req.body;
+    const { ip, reason, durationMinutes = 30, mfaCode, tempToken, method } = req.body;
     if (!ip) {
       return res.status(400).json({ message: "La IP es obligatoria" });
+    }
+
+    const adminUser = await User.findById(req.user.id);
+    if (!adminUser) {
+      return res.status(404).json({ message: "Administrador no encontrado." });
+    }
+
+    if (!mfaCode || !tempToken) {
+      const normalizedMethod = String(method || "email").toLowerCase();
+      const safeMethod = ["email", "sms", "call", "whatsapp", "console"].includes(normalizedMethod) ? normalizedMethod : "email";
+      const mfaResult = await issueActionMfa(adminUser, safeMethod);
+      if (mfaResult?.error) {
+        return res.status(502).json({ message: mfaResult.message || "No se pudo enviar el código MFA." });
+      }
+
+      return res.status(202).json({
+        twoFactorRequired: true,
+        tempToken: mfaResult.tempToken,
+        method: safeMethod,
+        message: "Te enviamos un código MFA para confirmar el bloqueo de IP."
+      });
+    }
+
+    const mfaOk = await verifyActionMfa(adminUser, tempToken, mfaCode);
+    if (!mfaOk) {
+      return res.status(401).json({ message: "Código MFA incorrecto o expirado." });
     }
 
     const blockedUntil = new Date(Date.now() + Math.max(1, Number(durationMinutes) || 30) * 60 * 1000);
