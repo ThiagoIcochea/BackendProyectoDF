@@ -227,6 +227,9 @@ router.put("/:id", verifyToken, isAdmin, async (req, res) => {
                 return res.status(400).json({ message: "Estado de entrega inválido." });
             }
             const previousStatus = delivery.status;
+            if (["ready_for_pickup", "shipped"].includes(status)) {
+                ensureDeliveryCode(delivery);
+            }
             delivery.status = status;
             syncStatusHistory(delivery, status, {
                 note: cancellationReason || `Estado actualizado por administracion: ${status}`
@@ -289,10 +292,13 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             if (!mfaCode || !tempToken) {
                 const normalizedMethod = String(method || "email").toLowerCase();
                 const safeMethod = ["email", "sms", "call", "whatsapp", "console"].includes(normalizedMethod) ? normalizedMethod : "email";
-                const newTempToken = await issueActionMfa(adminUser, safeMethod);
+                const mfaResult = await issueActionMfa(adminUser, safeMethod);
+                if (mfaResult?.error) {
+                    return res.status(502).json({ message: mfaResult.message || "No se pudo enviar el codigo MFA para confirmar la cancelacion." });
+                }
                 return res.status(202).json({
                     twoFactorRequired: true,
-                    tempToken: newTempToken,
+                    tempToken: mfaResult.tempToken,
                     method: safeMethod,
                     message: "Te enviamos un código MFA para confirmar la cancelación del pedido."
                 });
@@ -304,10 +310,8 @@ router.patch("/:id/status", verifyToken, isAdmin, async (req, res) => {
             }
         }
 
-        if (status === "ready_for_pickup") {
-            if (!delivery.deliveryCode) {
-                ensureDeliveryCode(delivery);
-            }
+        if (["ready_for_pickup", "shipped"].includes(status)) {
+            ensureDeliveryCode(delivery);
         }
 
         if (status === "delivered") {

@@ -12,6 +12,7 @@ const { canCreateClaim } = require('../utils/orderFlow');
 const { sendOrderUpdateEmail } = require('../utils/emailNotifications');
 const { evaluateClaimDescription } = require('../utils/claimReview');
 const { syncStatusHistory } = require('../utils/deliveryStatusHistory');
+const { ensureDeliveryCode } = require('../utils/deliveryCode');
 const { recordLog } = require('../utils/logger');
 const { isValidStatusTransition, getAllowedNextStatuses, getStatusLabel } = require('../utils/deliveryStatusFlow');
 const { issueActionMfa, verifyActionMfa } = require('../utils/twoFactor');
@@ -107,7 +108,6 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
 
     claim.status = status || 'resolved';
     claim.resolution = resolution || 'approved';
-    await claim.save({ session });
 
     const delivery = await Delivery.findById(claim.delivery._id).session(session);
     if (delivery) {
@@ -117,7 +117,16 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
       if (newDeliveryStatus === 'pending') {
         delivery.status = 'pending';
         syncStatusHistory(delivery, 'pending', { note: resolution || `Reclamo ${claim.status}` });
-      } else if (newDeliveryStatus === 'cancelled') {
+      } else if (['cancelled', 'delivered'].includes(newDeliveryStatus)) {
+        if (newDeliveryStatus === 'delivered') {
+          if (!deliveryCode) {
+            return res.status(400).json({ message: 'Para marcar el pedido como entregado debes ingresar el codigo de confirmacion del cliente.' });
+          }
+          if (String(delivery.deliveryCode || '').trim() && String(delivery.deliveryCode).trim() !== String(deliveryCode).trim()) {
+            return res.status(400).json({ message: 'El codigo de confirmacion no coincide con el codigo del pedido.' });
+          }
+        }
+
         const adminUser = await User.findById(req.user.id).session(session);
         if (!adminUser) {
           return res.status(404).json({ message: 'Administrador no encontrado.' });
@@ -126,6 +135,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         if (!mfaCode || !tempToken) {
           const normalizedMethod = String(method || 'email').toLowerCase();
           const safeMethod = ['email', 'sms', 'call', 'whatsapp', 'console'].includes(normalizedMethod) ? normalizedMethod : 'email';
+          const isDeliveryConfirmation = newDeliveryStatus === 'delivered';
           const mfaResult = await issueActionMfa(adminUser, safeMethod, {
             subject: 'Código para confirmar la cancelación del pedido - Nendoshop',
             title: 'Confirmación de cancelación',
@@ -158,6 +168,9 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
         if (!isAllowedTransition) {
           return res.status(400).json({ message: 'El reclamo solo puede mover el pedido a un estado válido y permitido por la logística.' });
         }
+        if (['ready_for_pickup', 'shipped'].includes(newDeliveryStatus)) {
+          ensureDeliveryCode(delivery);
+        }
         delivery.status = newDeliveryStatus;
         syncStatusHistory(delivery, newDeliveryStatus, { note: resolution || `Reclamo ${claim.status}` });
       }
@@ -167,6 +180,7 @@ router.patch('/:id/resolve', verifyToken, isAdmin, async (req, res) => {
       if (deliveryCode) {
         delivery.deliveryCode = deliveryCode;
       }
+      await claim.save({ session });
       await delivery.save({ session });
 
       if ((newDeliveryStatus === 'cancelled' || newDeliveryStatus === 'returned') && delivery.paymentId) {
