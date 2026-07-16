@@ -1,120 +1,243 @@
-# Backend del Proyecto DF - Sistema de Comercio Electrónico
+# Backend DF – API and Services
 
-Este es el backend oficial del proyecto desarrollado en Node.js, Express y MongoDB (usando Mongoose como ORM).
+## English Version
+
+### Description
+Backend DF is the Node.js + Express server that powers the NendoShop platform. It exposes REST APIs for authentication, products, payments, deliveries, claims, admin operations, support chat, and WebSocket-based real-time messaging.
+
+### Key Features
+- User authentication, registration, profile management, and two-factor verification
+- Product catalog and inventory-related operations
+- Payment creation and PayPal capture flow
+- Delivery and order status lifecycle management
+- Claims and refund/review workflow
+- Support chat and chatbot response handling
+- WebSocket real-time communication for community/support rooms
+- Logging and monitoring utilities for transactions and errors
+
+### Technology Stack
+- **Runtime:** Node.js
+- **Framework:** Express.js
+- **Database:** MongoDB + Mongoose
+- **Real-time:** WebSocket via ws
+- **Authentication:** JWT + cookies
+- **Email/Messaging:** Resend and webhook-based notification helpers
+- **Testing:** Node.js test runner
+
+### Project Architecture
+- **server.js**: Main Express server setup, CORS, middleware, route registration, and WebSocket server initialization.
+- **routes/**: API route modules such as authRoutes, products, payments, paypal, chatRoutes, chatbot, claims, deliveries, userRoutes, admin routes, and config routes.
+- **models/**: Mongoose schemas for User, Product, Payment, Delivery, Claim, ChatRoom, ChatMessage, Config, Log, and related entities.
+- **middlewares/**: Request verification middleware such as token validation and admin checks.
+- **utils/**: Business logic helpers for MFA, support bot, email notifications, delivery state transitions, logger, validation, and WebSocket broadcast management.
+- **tests/**: Automated regression and flow tests for claims, deliveries, email notifications, support bot behavior, and order flow.
+
+### Main API Endpoints
+#### Authentication
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/verify-2fa`
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password`
+
+#### Products
+- `GET /api/products`
+- `GET /api/products/:id`
+- `GET /api/products/search`
+- `POST /api/products` (admin)
+- `PUT /api/products/:id` (admin)
+- `DELETE /api/products/:id` (admin)
+
+#### Payments and PayPal
+- `POST /api/payments`
+- `GET /api/payments`
+- `POST /api/paypal/create-order`
+- `POST /api/paypal/capture-order`
+
+#### Deliveries and Orders
+- `POST /api/deliveries`
+- `GET /api/deliveries`
+- `GET /api/deliveries/:paymentId`
+- `PUT /api/deliveries/:id`
+- `PATCH /api/deliveries/:id/status`
+- `PUT /api/deliveries/my-orders/:id/return`
+
+#### Claims
+- `GET /api/claims`
+- `POST /api/claims`
+- `PATCH /api/claims/:id/resolve`
+
+#### Chat and Bot
+- `GET /api/chat/rooms/:roomKey/messages`
+- `POST /api/chatbot/message`
+- `GET /api/chatbot/health`
+- **WebSocket:** `/ws` for join/message/typing/report events
+
+#### Admin
+- `GET /api/admin/clients`
+- `GET /api/admin/products`
+- `GET /api/admin/payments`
+- `GET /api/admin/logs`
+
+### Run Commands
+From the backend project root:
+
+```bash
+npm install
+npm run dev
+```
+
+Alternative production-style start:
+
+```bash
+npm start
+```
+
+Run the test suite:
+
+```bash
+npm test
+```
+
+### Environment Variables
+Create a `.env` file in the backend root with the following variables:
+
+```env
+PORT=4000
+MONGO_URI=mongodb://localhost:27017/tu_bd
+JWT_SECRET=tu_secreto_super_seguro
+RESEND_API_KEY=your_resend_key
+RESEND_FROM_EMAIL=onboarding@resend.dev
+FRONTEND_URL=http://localhost:3000
+NODE_ENV=development
+```
+
+### Members
+- Icochea Rodriguez, Thiago Paolo (U22330428)
+- Chabria Loayza, Percy Alonzo (U20217294)
+- Rojas Olano, Aaron Toribio (U22210544)
+- Carbajal Añanca, Melany Daniela (U22222750)
+- Guevara Morales, Antonio Nicolás (U22217586)
+- Gómez Linares, Laura Angélica (U22217117)
 
 ---
 
-## Módulos del Sistema
+## Versión en Español
 
-### Nuevo: Pasarela de Pago PayPal Sandbox - API REST v2
-Este módulo integra de forma paralela la pasarela de pago PayPal Sandbox a través de llamadas directas a su API REST v2, utilizando el cliente nativo de Node.js v22 para garantizar mayor ligereza y evitar dependencias obsoletas.
+### Descripción
+Backend DF es el servidor Node.js + Express que da soporte a la plataforma NendoShop. Expone APIs REST para autenticación, productos, pagos, entregas, reclamos, operaciones administrativas, chat de soporte y mensajería en tiempo real mediante WebSocket.
 
-#### Propósito de la Funcionalidad
-- **Pagos en Línea Seguros:** Permite realizar transacciones con tarjetas de débito/crédito y balances de cuentas PayPal en un entorno de desarrollo seguro (Sandbox).
-- **Consistencia de Datos:** Tras una captura exitosa en la pasarela, se reutiliza el esquema común `Payment` para guardar la transacción local con estado `"Pagado"`, permitiendo que el flujo de entrega posterior continúe de manera estándar.
-- **Auditoría e Integridad:** Cada evento relevante del proceso genera registros en la colección de Logs y alertas de WebSocket para productos en descuento.
+### Funcionalidades Principales
+- Autenticación de usuarios, registro, gestión de perfil y verificación en dos pasos
+- Operaciones de catálogo y gestión de inventario
+- Creación de pagos y flujo de captura con PayPal
+- Gestión del ciclo de vida de entregas y estados de pedidos
+- Flujo de reclamos, devoluciones y revisión de casos
+- Chat de soporte y manejo de respuestas del chatbot
+- Comunicación en tiempo real para salas comunitarias y de soporte
+- Utilidades de logs y monitoreo de transacciones y errores
 
-#### Contrato de Endpoints (Rutas)
-Las rutas del módulo están registradas bajo `/api/paypal` en `server.js`:
-1. **Crear Orden:** `POST /api/paypal/create-order`
-   - Requiere: Token de autenticación.
-   - Entrada: JSON con el campo `total` (monto decimal).
-   - Retorna: ID de la orden de PayPal y enlaces de redirección para aprobación del cliente.
-2. **Capturar Pago:** `POST /api/paypal/capture-order`
-   - Requiere: Token de autenticación.
-   - Entrada: JSON con `orderId` de PayPal y el objeto `paymentData` (estructura compatible con el modelo `Payment`).
-   - Retorna: Registro del pago guardado localmente en MongoDB con estado `"Pagado"`.
+### Tecnologías
+- **Runtime:** Node.js
+- **Framework:** Express.js
+- **Base de datos:** MongoDB + Mongoose
+- **Tiempo real:** WebSocket con ws
+- **Autenticación:** JWT + cookies
+- **Email/Mensajería:** Resend y helpers de notificaciones
+- **Pruebas:** Node.js test runner
 
-### Integración: Módulo de Entregas Omnicanal (Deliveries) - Logística Flexible
-Este módulo maneja de forma independiente el ciclo de vida logístico y rastreo de despachos asociados a las compras (`Payments`), adaptándose dinámicamente al tipo de entrega seleccionado por el cliente ("Envío a Domicilio" vs "Retiro en Tienda").
+### Arquitectura del Proyecto
+- **server.js**: Configuración principal del servidor Express, CORS, middleware, registro de rutas y inicialización del WebSocket Server.
+- **routes/**: Módulos de rutas para auth, productos, pagos, paypal, chat, chatbot, claims, deliveries, usuarios y administración.
+- **models/**: Esquemas Mongoose para User, Product, Payment, Delivery, Claim, ChatRoom, ChatMessage, Config, Log y entidades relacionadas.
+- **middlewares/**: Middleware para verificación de tokens y permisos de administrador.
+- **utils/**: Lógica de negocio para MFA, soporte con IA, correos, transiciones de estado, logger, validación y broadcast por WebSocket.
+- **tests/**: Pruebas automatizadas para claims, deliveries, email notifications, support bot y order flow.
 
-#### Propósito de la Funcionalidad
-- **Soporte Omnicanal:** Soporta esquemas de envío (`shipping`) y retiro en tienda (`pickup`), optimizando la captura de datos en base al canal seleccionado.
-- **Validación Estricta:** Impide la entrada de datos basura (direcciones/agencias para retiros en tienda) y exige datos completos si es un envío a domicilio.
-- **Operaciones de Registro Rápido (Upsert):** El endpoint de creación actúa como un upsert lógico basado en el `paymentId` para evitar duplicación de despachos y mantener consistencia financiera.
-- **Lecturas Enriquecidas (Populate):** Los endpoints de consulta pueblan la referencia del pago (`paymentId`), permitiendo que el frontend reciba directamente los detalles del cliente y transacción en una sola petición.
+### Endpoints Principales de la API
+#### Autenticación
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/verify-2fa`
+- `POST /api/auth/forgot-password`
+- `POST /api/auth/reset-password`
 
-#### Esquema del Modelo (`Delivery`)
-- `paymentId`: `ObjectId` (Mapea obligatoriamente al modelo `Payment`).
-- `user`: `ObjectId` (Mapea obligatoriamente al modelo `User`). Requerido para relacionar la entrega con el cliente.
-- `deliveryType`: String (`shipping` | `pickup`). Requerido.
-- `status`: String (`pending` | `ready_for_pickup` | `shipped` | `delivered`). Por defecto es `pending`.
-- `destinationAddress`: String (Requerido solo si `deliveryType === 'shipping'`).
-- `reference`: String (Requerido solo si `deliveryType === 'shipping'`).
-- `agency`: String (Requerido solo si `deliveryType === 'shipping'`).
-- `trackingCode`: String (Código único para rastreo externo).
-- `estimatedDate`: Date (Fecha estimada de despacho/llegada).
+#### Productos
+- `GET /api/products`
+- `GET /api/products/:id`
+- `GET /api/products/search`
+- `POST /api/products` (admin)
+- `PUT /api/products/:id` (admin)
+- `DELETE /api/products/:id` (admin)
 
-#### Contrato de Endpoints (Rutas)
-Las rutas del módulo están registradas bajo `/api/deliveries` en `server.js`:
+#### Pagos y PayPal
+- `POST /api/payments`
+- `GET /api/payments`
+- `POST /api/paypal/create-order`
+- `POST /api/paypal/capture-order`
 
-1. **Registrar/Actualizar un despacho:** `POST /api/deliveries`
-   - Requiere: Token de autenticación (`verifyToken`).
-   - Entrada: JSON con `paymentId`, y opcionalmente `destinationAddress`, `reference` y `agency` si corresponde.
-   - Lógica: Compara el `deliveryType` del pago; si es `pickup` y se envían datos de dirección/agencia, rechaza con HTTP 400. Si es `shipping` y faltan campos, rechaza con HTTP 400. Si pasa las validaciones, hace un upsert de la entrega.
-2. **Listado global:** `GET /api/deliveries`
-   - Requiere: Administrador (`verifyToken`, `isAdmin`).
-   - Retorna: Array de entregas ordenadas de forma descendente, con información del pago poblada (`.populate("paymentId")`).
-3. **Consulta por compra:** `GET /api/deliveries/:paymentId`
-   - Requiere: Token de autenticación.
-   - Retorna: Objeto de entrega correspondiente con información del pago poblada.
-4. **Actualización de entrega por ID:** `PUT /api/deliveries/:id`
-   - Requiere: Administrador (`verifyToken`, `isAdmin`).
-   - Entrada: Parámetros a actualizar, respetando las validaciones condicionales del `deliveryType` de la entrega.
-5. **Actualización rápida de estado:** `PATCH /api/deliveries/:id/status`
-   - Requiere: Administrador (`verifyToken`, `isAdmin`).
-   - Entrada: JSON `{ "status": "ready_for_pickup" | "shipped" | "delivered" }`.
-   - Retorna: Entrega modificada tras validar el nuevo estado logístico.
-6. **Procesar devolución de pedido:** `PUT /api/deliveries/my-orders/:id/return`
-   - Requiere: Token de autenticación (`verifyToken`).
-   - Entrada: JSON `{ "returnCost": Number }` (opcional, por defecto 0).
-   - Lógica: Ejecuta una transacción atómica para cambiar el estado de la entrega a `"returned"`, guardar el costo de devolución, cambiar el estado del pago a `"Refunded"`, y reponer el stock de productos buscando por el campo `name` debido al Feature Freeze en pagos.
-   - Retorna: Objeto JSON consolidado ("Reclamo") con información de entrega, detalles de reembolso y stock restaurado.
+#### Entregas y Pedidos
+- `POST /api/deliveries`
+- `GET /api/deliveries`
+- `GET /api/deliveries/:paymentId`
+- `PUT /api/deliveries/:id`
+- `PATCH /api/deliveries/:id/status`
+- `PUT /api/deliveries/my-orders/:id/return`
 
----
+#### Reclamos
+- `GET /api/claims`
+- `POST /api/claims`
+- `PATCH /api/claims/:id/resolve`
 
-## Cómo Ejecutar el Entorno Local
+#### Chat y Bot
+- `GET /api/chat/rooms/:roomKey/messages`
+- `POST /api/chatbot/message`
+- `GET /api/chatbot/health`
+- **WebSocket:** `/ws` para join, mensajes, typing y reportes
 
-### Requisitos Previos
-- Node.js LTS (Versión 18+ recomendado, testeado en v22.17.0)
-- MongoDB activo (Local o URI de Mongo Atlas en variables de entorno)
+#### Admin
+- `GET /api/admin/clients`
+- `GET /api/admin/products`
+- `GET /api/admin/payments`
+- `GET /api/admin/logs`
 
-### Comandos de Instalación y Ejecución
-1. Instalar dependencias del proyecto:
-   ```bash
-   npm install
-   ```
-2. Configurar variables de entorno (`.env`):
-   Crea un archivo `.env` en la raíz (basándote en las llaves del proyecto) con los siguientes campos:
-   ```env
-   PORT=4000
-   MONGO_URI=mongodb://localhost:27017/tu_bd
-   JWT_SECRET=tu_secreto_super_seguro
+### Comandos de Ejecución
+Desde la raíz del backend:
 
-   # Configuración de PayPal Sandbox (Credenciales obtenidas en developer.paypal.com)
-   PAYPAL_CLIENT_ID=tu_client_id_sandbox
-   PAYPAL_CLIENT_SECRET=tu_client_secret_sandbox
-   PAYPAL_API_URL=https://api-m.sandbox.paypal.com
-   ```
-3. Levantar el servidor de desarrollo:
-   ```bash
-   npm run dev
-   ```
-   *(O alternativamente: `node server.js` / `nodemon server.js` según lo definido en `package.json`)*
+```bash
+npm install
+npm run dev
+```
 
----
+Inicio alternativo en modo producción:
 
-## Buenas Prácticas y Escalabilidad Futura
+```bash
+npm start
+```
 
-Para asegurar la robustez del sistema a medida que el Módulo de Entregas y la Pasarela de PayPal crezcan, se proponen las siguientes prácticas:
+Ejecutar la suite de pruebas:
 
-### Módulo de Entregas
-1. **Webhooks de Agencias de Envío:** Integrar un sistema de recepción de webhooks de transportistas (como Olva o Shalom) para actualizar automáticamente el estado (`deliveryStatus`) y código de tracking sin intervención humana directa.
-2. **Historial de Cambios de Estado:** Crear un esquema de auditoría/logs secundario (`DeliveryLogs`) para almacenar la fecha y el usuario (o proceso automático) que realizó cada transición de estado de entrega (ej: de `pending` a `in_transit`).
-3. **Notificaciones Push o Emails en Tiempo Real:** Disparar alertas (usando WebSocket, Courier o servicios SMTP) cada vez que el estado de entrega cambie a `in_transit` o `delivered` para optimizar la experiencia de usuario.
-4. **Referenciación e Indexación de Productos en Pagos (Post-Feature Freeze):** Actualmente, el stock se repone usando el nombre del producto (`name`) debido a las restricciones de cambios en el esquema de pagos durante la congelación de características. A futuro, se debe refactorizar `PaymentSchema` para almacenar `productId` (tipo `ObjectId` con referencia a `Product`) y crear índices para búsquedas más rápidas y consistentes, eliminando riesgos de colisiones en nombres o inconsistencias al actualizar catálogos.
+```bash
+npm test
+```
 
-### Pasarela de Pagos (PayPal)
-1. **Webhooks de PayPal (Conciliación Asíncrona):** En producción, el flujo del frontend puede interrumpirse (ej. si el usuario cierra el navegador tras pagar pero antes de que se complete `capture-order`). Implementar un endpoint de Webhooks para escuchar eventos como `PAYMENT.CAPTURE.COMPLETED` asegura que el pago se registre en la base de datos de manera asíncrona y segura.
-2. **Encriptación de Credenciales:** En producciones multi-inquilino o corporativas, evitar guardar secretos planos en el `.env`. Utilizar servicios de bóveda (como AWS Secrets Manager o HashiCorp Vault).
-3. **Tolerancia a Fallos y Reintentos:** Implementar políticas de reintentos exponenciales en los llamados HTTP a la API de PayPal para mitigar intermitencias de red temporales.
+### Variables de Entorno
+Crea un archivo `.env` en la raíz del backend con estas variables:
+
+```env
+PORT=4000
+MONGO_URI=mongodb://localhost:27017/tu_bd
+JWT_SECRET=tu_secreto_super_seguro
+RESEND_API_KEY=your_resend_key
+RESEND_FROM_EMAIL=onboarding@resend.dev
+FRONTEND_URL=http://localhost:3000
+NODE_ENV=development
+```
+
+### Integrantes
+- Icochea Rodriguez, Thiago Paolo (U22330428)
+- Chabria Loayza, Percy Alonzo (U20217294)
+- Rojas Olano, Aaron Toribio (U22210544)
+- Carbajal Añanca, Melany Daniela (U22222750)
+- Guevara Morales, Antonio Nicolás (U22217586)
+- Gómez Linares, Laura Angélica (U22217117)
